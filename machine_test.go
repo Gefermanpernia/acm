@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,11 +14,13 @@ import (
 )
 
 const testMachineRequest = `{"schema_version":1,"operation":"credential.select","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+const testCredential = `{"other":"kept","claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1}}`
 
 type machineResponse struct {
 	Profile    string `json:"profile"`
 	ConfigDir  string `json:"config_dir"`
 	Generation uint64 `json:"generation"`
+	LeaseID    string `json:"lease_id"`
 	Error      *struct {
 		Code string `json:"code"`
 	} `json:"error"`
@@ -42,9 +45,132 @@ func setupMachineV1Test(t *testing.T, profiles ...string) *tool {
 	for _, name := range profiles {
 		dir := profilePath(claude, name)
 		check(t, os.MkdirAll(dir, 0o755) == nil, "create profile %s", name)
-		check(t, os.WriteFile(filepath.Join(dir, claude.credFile), nil, 0o600) == nil, "create credential %s", name)
+		check(t, os.WriteFile(filepath.Join(dir, claude.credFile), []byte(testCredential), 0o600) == nil, "create credential %s", name)
 	}
 	return claude
+}
+
+func oauthRequest(operation string, id byte, fields string) string {
+	return fmt.Sprintf(`{"schema_version":1,"operation":%q,"operation_id":%q,%s}`, operation, strings.Repeat(string(id), 64), fields)
+}
+
+func beginOAuthRefresh(t *testing.T, id byte) (machineResponse, uint64) {
+	code, selection, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0, "select response = %+v, exit = %d", selection, code)
+	input := oauthRequest("oauth.refresh.begin", id, fmt.Sprintf(`"profile":"alpha","generation":%d`, selection.Generation))
+	code, response, _ := invokeMachine(t, "oauth.refresh.begin", input)
+	check(t, code == 0 && response.LeaseID != "", "begin response = %+v, exit = %d", response, code)
+	return response, selection.Generation
+}
+
+func TestOAuthRefreshLeaseIsBusyThenReusableAfterExpiry(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	first, generation := beginOAuthRefresh(t, 'b')
+	code, busy, _ := invokeMachine(t, "oauth.refresh.begin", oauthRequest("oauth.refresh.begin", 'c', `"profile":"alpha","generation":1`))
+	check(t, code == 75 && busy.Error != nil && busy.Error.Code == "lease_busy", "busy response = %+v, exit = %d", busy, code)
+
+	state, err := loadMachineState()
+	check(t, err == nil && len(state.Leases) == 1, "load lease state: %+v, %v", state, err)
+	state.Leases[0].ExpiresAt = time.Now().Add(-time.Second).Unix()
+	check(t, saveMachineState(state) == nil, "expire lease")
+	input := oauthRequest("oauth.refresh.begin", 'd', fmt.Sprintf(`"profile":"alpha","generation":%d`, generation))
+	code, second, _ := invokeMachine(t, "oauth.refresh.begin", input)
+	check(t, code == 0, "second begin = %+v, exit = %d", second, code)
+	check(t, second.LeaseID != first.LeaseID, "expired lease was reused")
+}
+
+func TestOAuthRefreshCommitFailsClosedOnStaleWriteAndFsync(t *testing.T) {
+	tests := []struct {
+		name    string
+		breakIO func()
+		code    string
+	}{
+		{"stale generation", func() {
+			state, _ := loadMachineState()
+			state.Generation++
+			check(t, saveMachineState(state) == nil, "advance generation")
+		}, "stale_generation"},
+		{"expired lease", func() {
+			state, _ := loadMachineState()
+			state.Leases[0].ExpiresAt = time.Now().Add(-time.Second).Unix()
+			check(t, saveMachineState(state) == nil, "expire lease")
+		}, "lease_expired"},
+		{"write failure", func() { machinePersist = func(string, []byte) error { return errors.New("secret write detail") } }, "persistence_failed"},
+		{"fsync failure", func() { machineSync = func(*os.File) error { return errors.New("secret sync detail") } }, "persistence_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			lease, generation := beginOAuthRefresh(t, 'b')
+			oldPersist, oldSync := machinePersist, machineSync
+			defer func() { machinePersist, machineSync = oldPersist, oldSync }()
+			test.breakIO()
+			input := oauthRequest("oauth.refresh.commit", 'c', fmt.Sprintf(`"profile":"alpha","generation":%d,"lease_id":%q,"access_token":"new-access","refresh_token":"new-refresh","expires_at":99`, generation, lease.LeaseID))
+			code, response, raw := invokeMachine(t, "oauth.refresh.commit", input)
+			check(t, code != 0 && response.Error != nil && response.Error.Code == test.code, "commit response = %+v, exit = %d", response, code)
+			credential, _ := os.ReadFile(filepath.Join(profilePath(tools["claude"], "alpha"), ".credentials.json"))
+			check(t, string(credential) == testCredential, "credential changed after failure: %s", credential)
+			check(t, !strings.Contains(raw, "new-access") && !strings.Contains(raw, "new-refresh") && !strings.Contains(raw, "detail"), "secret leaked: %s", raw)
+		})
+	}
+}
+
+func TestOAuthRefreshCommitIsAtomic0600AndSecretless(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	lease, generation := beginOAuthRefresh(t, 'b')
+	input := oauthRequest("oauth.refresh.commit", 'c', fmt.Sprintf(`"profile":"alpha","generation":%d,"lease_id":%q,"access_token":"new-access","refresh_token":"new-refresh","expires_at":99`, generation, lease.LeaseID))
+	code, response, raw := invokeMachine(t, "oauth.refresh.commit", input)
+	check(t, code == 0 && response.Generation == generation+1 && strings.Contains(raw, `"outcome":"committed"`), "commit response = %+v, exit = %d", response, code)
+	path := filepath.Join(profilePath(tools["claude"], "alpha"), ".credentials.json")
+	credential, err := os.ReadFile(path)
+	check(t, err == nil && strings.Contains(string(credential), `"other":"kept"`) && strings.Contains(string(credential), "new-refresh"), "credential = %s, err = %v", credential, err)
+	info, _ := os.Stat(path)
+	check(t, info.Mode().Perm() == 0o600, "credential mode = %o", info.Mode().Perm())
+	temps, _ := filepath.Glob(path + ".tmp-*")
+	state, _ := os.ReadFile(machineStateFile())
+	check(t, len(temps) == 0 && !strings.Contains(raw+string(state), "new-access") && !strings.Contains(raw+string(state), "new-refresh"), "secret or temporary file escaped commit")
+}
+
+func TestOAuthRefreshAbortQuarantinesOnlyTerminalReasons(t *testing.T) {
+	tests := []struct {
+		reason      string
+		quarantined bool
+	}{{"invalid_grant", true}, {"revoked", true}, {"unrecoverable", true}, {"network_error", false}}
+	for _, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			lease, _ := beginOAuthRefresh(t, 'b')
+			input := oauthRequest("oauth.refresh.abort", 'c', fmt.Sprintf(`"profile":"alpha","lease_id":%q,"reason":%q`, lease.LeaseID, test.reason))
+			code, response, _ := invokeMachine(t, "oauth.refresh.abort", input)
+			check(t, code == 0, "abort response = %+v, exit = %d", response, code)
+			code, _, _ = invokeMachine(t, "credential.select", strings.Replace(testMachineRequest, strings.Repeat("a", 64), strings.Repeat("d", 64), 1))
+			check(t, (code == machineExitUnavailable) == test.quarantined, "reason %q quarantine=%v exit=%d", test.reason, test.quarantined, code)
+		})
+	}
+}
+
+func TestMachineRefreshLeaseProcessKillBeforeCommit(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	check(t, withMachineState(func() error { return saveMachineState(machineState{Generation: 1}) }) == nil, "seed generation")
+	bin := filepath.Join(t.TempDir(), "acm")
+	output, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	check(t, err == nil, "build: %v\n%s", err, output)
+	run := func(operation, input string) (int, string, string) {
+		cmd := exec.Command(bin, "machine", "v1", operation)
+		cmd.Env, cmd.Stdin = append(os.Environ(), "HOME="+homeDir, "ACM_DIR="+acmDir), strings.NewReader(input)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		stdout, err := cmd.Output()
+		if err == nil {
+			return 0, string(stdout), stderr.String()
+		}
+		return err.(*exec.ExitError).ExitCode(), string(stdout), stderr.String()
+	}
+	begin := oauthRequest("oauth.refresh.begin", 'b', `"profile":"alpha","generation":1`)
+	code, stdout, stderr := run("oauth.refresh.begin", begin)
+	check(t, code == 0 && stderr == "" && strings.Contains(stdout, `"lease_id"`), "process begin exit=%d stdout=%s stderr=%q", code, stdout, stderr)
+	code, stdout, stderr = run("oauth.refresh.begin", oauthRequest("oauth.refresh.begin", 'c', `"profile":"alpha","generation":1`))
+	check(t, code == 75 && stderr == "" && strings.Contains(stdout, "lease_busy"), "post-kill begin exit=%d stdout=%s stderr=%q", code, stdout, stderr)
 }
 
 func invokeMachine(t *testing.T, operation, input string) (int, machineResponse, string) {
