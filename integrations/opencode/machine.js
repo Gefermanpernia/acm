@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 const operations = new Set([
   "credential.select",
   "diagnostics.status",
+  "diagnostics.record",
   "oauth.refresh.begin",
   "oauth.refresh.commit",
   "oauth.refresh.abort",

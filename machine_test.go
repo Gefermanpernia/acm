@@ -18,17 +18,23 @@ const testMachineRequest = `{"schema_version":1,"operation":"credential.select",
 const testCredential = `{"other":"kept","claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1}}`
 
 type machineResponse struct {
-	Profile    string `json:"profile"`
-	ConfigDir  string `json:"config_dir"`
-	Generation uint64 `json:"generation"`
-	LeaseID    string `json:"lease_id"`
-	Outcome    string `json:"outcome"`
-	ResetAt    int64  `json:"reset_at"`
-	Error      *struct {
+	Profile      string              `json:"profile"`
+	ConfigDir    string              `json:"config_dir"`
+	Generation   uint64              `json:"generation"`
+	LeaseID      string              `json:"lease_id"`
+	Outcome      string              `json:"outcome"`
+	ResetAt      int64               `json:"reset_at"`
+	Diagnostics  []machineDiagnostic `json:"diagnostics"`
+	ActiveLeases int                 `json:"active_leases"`
+	Error        *struct {
 		Code      string `json:"code"`
 		Message   string `json:"message"`
 		Retryable bool   `json:"retryable"`
 	} `json:"error"`
+}
+
+func diagnosticRequest(id int, component, event, outcome string) string {
+	return fmt.Sprintf(`{"schema_version":1,"operation":"diagnostics.record","operation_id":"%064x","component":%q,"event":%q,"outcome":%q,"retryable":true}`, id, component, event, outcome)
 }
 
 func check(t *testing.T, ok bool, format string, args ...any) {
@@ -248,6 +254,30 @@ func TestMachineLedgerIsOncePerProfileStaleAndBounded(t *testing.T) {
 	check(t, saveMachineState(state) == nil, "save state")
 	code, response, _ := invokeMachine(t, "credential.select", testMachineRequest)
 	check(t, code == 0, "stale operation was not reusable: %+v, exit = %d", response, code)
+}
+
+func TestMachineDiagnosticsAreBoundedRedactedAnd0600(t *testing.T) {
+	setupMachineV1Test(t)
+	stale := machineDiagnostic{Time: time.Now().Add(-machineLedgerTTL - time.Second).UnixMilli(), Component: "oauth", Event: "refresh", Outcome: "failed"}
+	check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(machineState{Diagnostics: []machineDiagnostic{stale}}) == nil, "seed stale diagnostic")
+	for i := 1; i <= machineDiagnosticMax+1; i++ {
+		component, event, outcome := "/private/profile/path", "secret-token", "identifier-123"
+		if i == machineDiagnosticMax+1 {
+			component, event, outcome = "quota", "transition", "cooling"
+		}
+		code, response, _ := invokeMachine(t, "diagnostics.record", diagnosticRequest(i, component, event, outcome))
+		check(t, code == 0 && response.Outcome == "recorded", "record %d = %+v, exit = %d", i, response, code)
+	}
+	state, err := loadMachineState()
+	check(t, err == nil && len(state.Diagnostics) == machineDiagnosticMax, "diagnostics = %d, err = %v", len(state.Diagnostics), err)
+	check(t, state.Diagnostics[0].Time > stale.Time && state.Diagnostics[len(state.Diagnostics)-1].Outcome == "cooling", "ring was not pruned: %+v", state.Diagnostics)
+	raw, _ := os.ReadFile(machineStateFile())
+	unsafe := string(raw)
+	check(t, !strings.Contains(unsafe, "secret-token") && !strings.Contains(unsafe, "/private/") && !strings.Contains(unsafe, "identifier-123") && !strings.Contains(unsafe, fmt.Sprintf("%064x", machineDiagnosticMax+1)), "unsafe diagnostic state: %s", unsafe)
+	info, _ := os.Stat(machineStateFile())
+	check(t, info.Mode().Perm() == 0o600, "diagnostic mode = %o", info.Mode().Perm())
+	code, status, _ := invokeMachine(t, "diagnostics.status", strings.Replace(testMachineRequest, "credential.select", "diagnostics.status", 1))
+	check(t, code == 0 && len(status.Diagnostics) == 64 && status.ActiveLeases == 0, "status = %+v, exit = %d", status, code)
 }
 
 func TestMachineSelectDistinguishesCoolingAndQuarantinedProfiles(t *testing.T) {

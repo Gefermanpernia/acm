@@ -20,6 +20,7 @@ const (
 	machineMaxOutputBytes  = 16 << 10
 	machineLedgerMax       = 1024
 	machineLedgerTTL       = 24 * time.Hour
+	machineDiagnosticMax   = 256
 	machineExitInvalid     = 2
 	machineExitUnavailable = 69
 )
@@ -41,6 +42,10 @@ type machineRequest struct {
 	ExpiresAt     int64  `json:"expires_at"`
 	ResetAt       int64  `json:"reset_at"`
 	Reason        string `json:"reason"`
+	Component     string `json:"component"`
+	Event         string `json:"event"`
+	Outcome       string `json:"outcome"`
+	Retryable     bool   `json:"retryable"`
 }
 
 type machineOperation struct {
@@ -51,11 +56,20 @@ type machineOperation struct {
 }
 
 type machineState struct {
-	Generation  uint64             `json:"generation"`
-	Operations  []machineOperation `json:"operations"`
-	Leases      []machineLease     `json:"leases,omitempty"`
-	Quarantined []string           `json:"quarantined,omitempty"`
-	Cooling     map[string]int64   `json:"cooling,omitempty"`
+	Generation  uint64              `json:"generation"`
+	Operations  []machineOperation  `json:"operations"`
+	Leases      []machineLease      `json:"leases,omitempty"`
+	Quarantined []string            `json:"quarantined,omitempty"`
+	Cooling     map[string]int64    `json:"cooling,omitempty"`
+	Diagnostics []machineDiagnostic `json:"diagnostics,omitempty"`
+}
+
+type machineDiagnostic struct {
+	Time      int64  `json:"time"`
+	Component string `json:"component"`
+	Event     string `json:"event"`
+	Outcome   string `json:"outcome"`
+	Retryable bool   `json:"retryable"`
 }
 
 type machineLease struct {
@@ -77,6 +91,8 @@ func runMachine(args []string, in io.Reader, out io.Writer) int {
 			response, exit = selectMachineProfile(req)
 		case "diagnostics.status":
 			response, exit = machineStatus(req)
+		case "diagnostics.record":
+			response, exit = recordMachineDiagnostic(req)
 		case "oauth.refresh.begin":
 			response, exit = beginMachineRefresh(req)
 		case "oauth.refresh.commit":
@@ -130,13 +146,16 @@ func decodeMachineRequest(args []string, in io.Reader) (machineRequest, map[stri
 }
 
 func validMachineRequest(req machineRequest) bool {
+	if req.Operation == "diagnostics.record" {
+		return req.Profile == "" && req.Generation == 0 && req.LeaseID == "" && req.AccessToken == "" && req.RefreshToken == "" && req.ExpiresAt == 0 && req.ResetAt == 0 && req.Reason == "" && req.Component != "" && req.Event != "" && req.Outcome != ""
+	}
 	if req.Operation == "oauth.refresh.commit" {
 		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID != "" && req.AccessToken != "" && req.RefreshToken != "" && req.ExpiresAt > 0 && req.ResetAt == 0 && req.Reason == ""
 	}
 	if req.Operation == "quota.exhaust" {
 		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID == "" && req.AccessToken == "" && req.RefreshToken == "" && req.ExpiresAt == 0 && req.Reason == ""
 	}
-	return req.AccessToken == "" && req.RefreshToken == "" && req.ResetAt == 0
+	return req.AccessToken == "" && req.RefreshToken == "" && req.ResetAt == 0 && req.Component == "" && req.Event == "" && req.Outcome == "" && !req.Retryable
 }
 
 func selectMachineProfile(req machineRequest) (response map[string]any, exit int) {
@@ -222,8 +241,52 @@ func machineStatus(req machineRequest) (map[string]any, int) {
 	if err != nil {
 		return machineFailure(req.Operation, req.OperationID, "state_unavailable", "ACM state is unavailable", false), 74
 	}
+	diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
+	if diagnostics == nil {
+		diagnostics = []machineDiagnostic{}
+	}
+	if len(diagnostics) > 64 {
+		diagnostics = diagnostics[len(diagnostics)-64:]
+	}
 	return map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation,
-		"operation_id": req.OperationID, "generation": state.Generation}, 0
+		"operation_id": req.OperationID, "generation": state.Generation, "diagnostics": diagnostics, "active_leases": active}, 0
+}
+
+func recordMachineDiagnostic(req machineRequest) (response map[string]any, exit int) {
+	err := updateMachineState(func(state *machineState) error {
+		event := machineDiagnostic{Time: time.Now().UnixMilli(), Component: safeDiagnostic(req.Component, "quota", "oauth", "adapter"), Event: safeDiagnostic(req.Event, "transition", "refresh", "compatibility"), Outcome: safeDiagnostic(req.Outcome, "cooling", "quarantined", "unavailable", "failed"), Retryable: req.Retryable}
+		state.Diagnostics = pruneMachineDiagnostics(append(state.Diagnostics, event), event.Time)
+		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "outcome": "recorded"}
+		return nil
+	})
+	return finishMachineState(req, response, exit, err)
+}
+
+func safeDiagnostic(value string, allowed ...string) string {
+	if slices.Contains(allowed, value) {
+		return value
+	}
+	return "unknown"
+}
+
+func pruneMachineDiagnostics(events []machineDiagnostic, timestamp int64) []machineDiagnostic {
+	cutoff := timestamp - machineLedgerTTL.Milliseconds()
+	events = slices.DeleteFunc(events, func(event machineDiagnostic) bool { return event.Time <= cutoff })
+	if len(events) > machineDiagnosticMax {
+		events = events[len(events)-machineDiagnosticMax:]
+	}
+	return events
+}
+
+func machineDiagnosticSnapshot(state machineState, timestamp time.Time) ([]machineDiagnostic, int) {
+	diagnostics := pruneMachineDiagnostics(state.Diagnostics, timestamp.UnixMilli())
+	active := 0
+	for _, lease := range state.Leases {
+		if lease.ExpiresAt > timestamp.Unix() {
+			active++
+		}
+	}
+	return diagnostics, active
 }
 
 func nextMachineProfile(t *tool, attempted, quarantined []string, cooling map[string]int64, timestamp int64) (string, string, error) {

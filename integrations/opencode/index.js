@@ -8,6 +8,14 @@ import { handleQuotaResponse, mapMachineResponse } from "./quota.js";
 
 export function createPlugin(overrides = {}) {
   const deps = { platform: process.platform, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
+  deps.diagnosticError ??= (code) => console.error(`ACM diagnostics: ${code}`);
+  deps.diagnostic ??= async ({ component, event, outcome, retryable }) => {
+    try {
+      await deps.machine("diagnostics.record", { operation_id: operationId("diagnostics", randomUUID()), component, event, outcome, retryable });
+    } catch {
+      deps.diagnosticError("record_failed");
+    }
+  };
   return async function AcmOpenCodePlugin() {
     const observed = deps.platform === "linux" ? await resolveVersions(deps.versionIO) : {};
     assertCompatibility(deps.platform, true, observed);

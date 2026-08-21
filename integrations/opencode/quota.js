@@ -2,6 +2,10 @@ import { redactDiagnostic } from "./diagnostics.js";
 
 const maxEvidenceBytes = 4 << 10;
 
+function reportDiagnosticFailure(dependencies, code) {
+  try { (dependencies.diagnosticError ?? console.error)(code); } catch {}
+}
+
 async function readEvidence(response) {
   const reader = response.clone().body?.getReader();
   if (!reader) return null;
@@ -83,12 +87,18 @@ export async function handleQuotaResponse(response, context, dependencies) {
     if (error?.code === "stale_generation") return response;
     return mapMachineResponse(error, dependencies.now ?? Date.now);
   }
-  dependencies.diagnostic?.(redactDiagnostic({
+  const diagnostic = redactDiagnostic({
     time: (dependencies.now ?? Date.now)(),
     component: "quota",
     event: "transition",
     outcome: transition.outcome,
     retryable: transition.outcome !== "quarantined",
-  }));
+  });
+  if (typeof dependencies.diagnostic !== "function") {
+    reportDiagnosticFailure(dependencies, "missing_diagnostic_sink");
+  } else {
+    try { await dependencies.diagnostic(diagnostic); }
+    catch { reportDiagnosticFailure(dependencies, "record_failed"); }
+  }
   return mapMachineResponse(transition, dependencies.now ?? Date.now);
 }

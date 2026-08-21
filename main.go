@@ -578,10 +578,27 @@ func cmdDoctor() int {
 		fmt.Printf("%-7s %s\n", t.name+":", v)
 	}
 	fmt.Printf("acm    : v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
-	fmt.Println("estado : " + acmDir)
 	fmt.Printf("cooldown por defecto: %dm\n", defaultCooldownMin)
-	fmt.Println()
-	return cmdLs()
+	state, err := loadMachineState()
+	if err != nil {
+		fmt.Println("opencode diagnostics: unavailable")
+		return 0
+	}
+	diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
+	fmt.Printf("opencode diagnostics: %d; active leases: %d\n", len(diagnostics), active)
+	counts := make(map[string]int)
+	for _, event := range diagnostics {
+		counts[event.Component+"."+event.Event+"."+event.Outcome]++
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Printf("  %s: %d\n", key, counts[key])
+	}
+	return 0
 }
 
 func seedProfile(t *tool, dst string) {

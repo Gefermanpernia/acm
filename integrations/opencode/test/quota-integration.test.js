@@ -80,9 +80,11 @@ test("maps real machine transitions without owning retry or continuation", async
     return responseFor(fixture.confirmed);
   });
   const quota = machineCalls.find(([operation]) => operation === "quota.exhaust");
+  const diagnostic = machineCalls.find(([operation]) => operation === "diagnostics.record");
   assert.equal(providerCalls, 1);
   assert.equal(quota[1].generation, 2);
   assert.equal(quota[2].generation, 3);
+  assert.deepEqual(diagnostic[1], { operation_id: diagnostic[1].operation_id, component: "quota", event: "transition", outcome: "cooling", retryable: true });
   const replacement = await runMachine("credential.select", { operation_id: refreshed.operationID }, { binary, env });
   assert.equal(replacement.profile, "beta");
   assert.deepEqual(Object.keys(refreshed.plugin).sort(), ["auth", "chat.headers"]);

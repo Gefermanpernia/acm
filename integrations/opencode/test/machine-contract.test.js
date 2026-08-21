@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -56,6 +56,7 @@ test("characterizes every adapter machine operation against the real binary", as
   const binary = join(root, "acm");
   const acmDir = join(root, "acm-state");
   const profileDir = join(acmDir, "profiles", "claude", "alpha");
+  const statePath = join(acmDir, "state", "opencode-machine-v1.json");
   const secrets = ["old-access", "old-refresh", "new-access", "new-refresh"];
   await mkdir(profileDir, { recursive: true });
   await writeFile(join(profileDir, ".credentials.json"), JSON.stringify({
@@ -117,13 +118,18 @@ test("characterizes every adapter machine operation against the real binary", as
     outcome: "string", generation: "number", retry_after: "number",
   }), { code: "ERR_ASSERTION" });
 
+  const recorded = invoke(binary, env, "diagnostics.record", "0".repeat(64), { component: profileDir, event: secrets[0], outcome: "private-identifier", retryable: true });
+  assertContract(recorded, "diagnostics.record", { outcome: "string" });
   const status = invoke(binary, env, "diagnostics.status", "f".repeat(64));
-  assertContract(status, "diagnostics.status", { generation: "number" });
+  assertContract(status, "diagnostics.status", { generation: "number", diagnostics: "object", active_leases: "number" });
+  assert.deepEqual(status.response.diagnostics.at(-1), { time: status.response.diagnostics.at(-1).time, component: "unknown", event: "unknown", outcome: "unknown", retryable: true });
+  assert.equal((await stat(statePath)).mode & 0o777, 0o600);
+  assertError(invoke(binary, env, "diagnostics.record", "4".repeat(64), { body: { refresh_token: secrets[1], request: "private-request-body" } }), "diagnostics.record", 2, "invalid_request", false, "");
+  assert.doesNotMatch(await readFile(statePath, "utf8"), /old-access|old-refresh|private-request-body|private-identifier|acm-machine-contract-|\/profiles\//);
 
   const betaDir = join(acmDir, "profiles", "claude", "beta");
   await mkdir(betaDir, { recursive: true });
   await writeFile(join(betaDir, ".credentials.json"), "{}", { mode: 0o600 });
-  const statePath = join(acmDir, "state", "opencode-machine-v1.json");
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], cooling: { alpha: resetAt + 20, beta: resetAt + 10 } }));
   const cooling = invoke(binary, env, "credential.select", "1".repeat(64));
   assertError(cooling, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
