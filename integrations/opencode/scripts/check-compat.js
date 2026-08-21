@@ -1,5 +1,10 @@
-import { assertCompatibility } from "../compat.js";
-import versions from "../compatibility.json" with { type: "json" };
+import { assertCompatibility, resolveVersions } from "../compat.js";
 
-assertCompatibility("linux", true, versions);
-process.stdout.write(`OpenCode ${versions.opencode}, SDK ${versions.sdk}, Claude CLI ${versions.claude}\n`);
+try {
+  const observed = await resolveVersions();
+  assertCompatibility(process.platform, true, observed);
+  process.stdout.write(`OpenCode ${observed.opencode}, SDK ${observed.sdk}, Claude CLI ${observed.claude}\n`);
+} catch {
+  process.stderr.write("OpenCode compatibility check failed\n");
+  process.exitCode = 1;
+}

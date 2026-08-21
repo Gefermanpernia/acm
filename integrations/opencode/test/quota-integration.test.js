@@ -11,8 +11,6 @@ import { runMachine } from "../machine.js";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/quota.json", import.meta.url)));
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
-const versions = { opencode: "1.18.19", sdk: "1.17.12", claude: "2.1.236" };
-
 test("maps real machine transitions without owning retry or continuation", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "acm-quota-integration-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -20,11 +18,19 @@ test("maps real machine transitions without owning retry or continuation", async
   const acmDir = join(root, "acm-state");
   const stateDir = join(acmDir, "state");
   const statePath = join(stateDir, "opencode-machine-v1.json");
+  const opencodeRoot = join(root, "opencode");
+  const sdkRoot = join(opencodeRoot, "node_modules", "@opencode-ai", "sdk");
   const env = { ...process.env, HOME: join(root, "home"), ACM_DIR: acmDir,
     ACM_OPENCODE_CONFIG_HOME: join(root, "opencode-config"), ACM_DEFAULT_COOLDOWN_MIN: "1" };
   const build = spawnSync("go", ["build", "-o", binary, "."], { cwd: repository, encoding: "utf8" });
   assert.equal(build.status, 0, build.stderr);
+  await mkdir(sdkRoot, { recursive: true });
   await mkdir(stateDir, { recursive: true });
+  await writeFile(join(opencodeRoot, "package.json"), JSON.stringify({ name: "opencode-ai", version: "1.18.19" }));
+  await writeFile(join(sdkRoot, "package.json"), JSON.stringify({ name: "@opencode-ai/sdk", version: "1.17.12" }));
+  const versionIO = { execFile(command, _args, _options, callback) {
+    callback(null, command === "which" ? `${join(opencodeRoot, "bin", "opencode")}\n` : "2.1.236 (Claude Code)\n", "");
+  } };
   const credential = (expiresAt) => JSON.stringify({ claudeAiOauth: {
     accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt,
   } });
@@ -40,7 +46,7 @@ test("maps real machine transitions without owning retry or continuation", async
     return response;
   };
   const attempt = async (session, now, send = async () => assert.fail("provider must not be called")) => {
-    const plugin = await createPlugin({ platform: "linux", versions, machine, now, send })();
+    const plugin = await createPlugin({ platform: "linux", versionIO, machine, now, send })();
     const output = { headers: {} };
     await plugin["chat.headers"]({ sessionID: session, message: { id: "message" } }, output);
     const auth = await plugin.auth.loader(async () => ({ type: "oauth" }));

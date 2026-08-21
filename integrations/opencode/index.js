@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertCompatibility, operationId, transformRequest } from "./compat.js";
+import { assertCompatibility, operationId, resolveVersions, transformRequest } from "./compat.js";
 import { runMachine } from "./machine.js";
 import { refreshCredentials } from "./oauth.js";
 import { handleQuotaResponse, mapMachineResponse } from "./quota.js";
-import versions from "./compatibility.json" with { type: "json" };
 
 export function createPlugin(overrides = {}) {
-  const deps = { platform: process.platform, versions, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
+  const deps = { platform: process.platform, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
   return async function AcmOpenCodePlugin() {
+    const observed = deps.platform === "linux" ? await resolveVersions(deps.versionIO) : {};
+    assertCompatibility(deps.platform, true, observed);
     async function credentials(selection, id) {
-      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir), deps.versions);
+      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir), observed);
       const document = JSON.parse(await deps.read(join(selection.config_dir, ".credentials.json"), "utf8"));
       const source = document?.claudeAiOauth;
       if (typeof source?.accessToken !== "string" || typeof source?.refreshToken !== "string" || typeof source?.expiresAt !== "number") {
