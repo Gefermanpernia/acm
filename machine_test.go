@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ type machineResponse struct {
 	ConfigDir  string `json:"config_dir"`
 	Generation uint64 `json:"generation"`
 	LeaseID    string `json:"lease_id"`
+	Outcome    string `json:"outcome"`
+	ResetAt    int64  `json:"reset_at"`
 	Error      *struct {
 		Code string `json:"code"`
 	} `json:"error"`
@@ -52,6 +55,10 @@ func setupMachineV1Test(t *testing.T, profiles ...string) *tool {
 
 func oauthRequest(operation string, id byte, fields string) string {
 	return fmt.Sprintf(`{"schema_version":1,"operation":%q,"operation_id":%q,%s}`, operation, strings.Repeat(string(id), 64), fields)
+}
+
+func quotaRequest(id byte, profile string, generation uint64, resetAt int64) string {
+	return oauthRequest("quota.exhaust", id, fmt.Sprintf(`"profile":%q,"generation":%d,"reset_at":%d`, profile, generation, resetAt))
 }
 
 func beginOAuthRefresh(t *testing.T, id byte) (machineResponse, uint64) {
@@ -263,4 +270,96 @@ func TestMachineCLIProcessBounds(t *testing.T) {
 	check(t, code == 0 && stderr == "" && len(stdout) <= machineMaxOutputBytes, "normal process: exit=%d stdout=%d stderr=%q", code, len(stdout), stderr)
 	code, stdout, stderr = run(strings.Repeat("x", machineMaxInputBytes+1))
 	check(t, code == machineExitInvalid && stderr == "" && len(stdout) <= machineMaxOutputBytes, "oversized process: exit=%d stdout=%d stderr=%q", code, len(stdout), stderr)
+}
+
+func TestMachineQuotaExhaustRecordsCooldownAndIsIdempotent(t *testing.T) {
+	setupMachineV1Test(t, "alpha", "beta")
+	code, selected, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0 && selected.Profile == "alpha", "selection = %+v, exit = %d", selected, code)
+	resetAt := time.Now().Add(20 * time.Minute).Unix()
+	request := quotaRequest('a', selected.Profile, selected.Generation, resetAt)
+
+	code, exhausted, raw := invokeMachine(t, "quota.exhaust", request)
+	check(t, code == 0 && exhausted.Outcome == "cooling" && exhausted.ResetAt == resetAt && exhausted.Generation == selected.Generation+1, "exhaustion = %+v, exit = %d", exhausted, code)
+	check(t, len(raw) <= machineMaxOutputBytes && !strings.Contains(strings.ToLower(raw), "token") && !strings.Contains(raw, testCredential), "unsafe response: %s", raw)
+	state, err := loadMachineState()
+	check(t, err == nil && state.Cooling["alpha"] == resetAt && len(state.Quarantined) == 0, "state = %+v, err = %v", state, err)
+	check(t, len(state.Operations) == 1 && slices.Contains(state.Operations[0].Exhausted, "alpha"), "ledger = %+v", state.Operations)
+
+	code, repeated, _ := invokeMachine(t, "quota.exhaust", request)
+	check(t, code == 0 && repeated.ResetAt == resetAt && repeated.Generation == exhausted.Generation, "repeat = %+v, exit = %d", repeated, code)
+	code, replacement, _ := invokeMachine(t, "credential.select", strings.Replace(testMachineRequest, strings.Repeat("a", 64), strings.Repeat("b", 64), 1))
+	check(t, code == 0 && replacement.Profile == "beta", "replacement = %+v, exit = %d", replacement, code)
+}
+
+func TestMachineQuotaExhaustUsesFallbackForMissingOrInvalidReset(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+	}{{"missing", `"profile":"alpha","generation":1`},
+		{"expired", fmt.Sprintf(`"profile":"alpha","generation":1,"reset_at":%d`, time.Now().Add(-time.Minute).Unix())}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			code, _, _ := invokeMachine(t, "credential.select", testMachineRequest)
+			before := time.Now().Unix() + int64(defaultCooldownMin)*60
+			code, exhausted, _ := invokeMachine(t, "quota.exhaust", oauthRequest("quota.exhaust", 'a', test.fields))
+			after := time.Now().Unix() + int64(defaultCooldownMin)*60
+			check(t, code == 0 && exhausted.ResetAt >= before && exhausted.ResetAt <= after, "fallback = %+v, exit = %d", exhausted, code)
+		})
+	}
+}
+
+func TestMachineQuotaExhaustPersistenceFailurePreservesState(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	_, selected, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	before, _ := os.ReadFile(machineStateFile())
+	oldPersist := machinePersist
+	machinePersist = func(string, []byte) error { return errors.New("private persistence detail") }
+	t.Cleanup(func() { machinePersist = oldPersist })
+
+	code, response, raw := invokeMachine(t, "quota.exhaust", quotaRequest('a', "alpha", selected.Generation, 0))
+	after, _ := os.ReadFile(machineStateFile())
+	check(t, code == 74 && response.Error != nil && response.Error.Code == "state_unavailable", "response = %+v, exit = %d", response, code)
+	check(t, string(before) == string(after) && !strings.Contains(raw, "private"), "failed persistence changed or leaked state: %s", raw)
+}
+
+func TestMachineQuotaExhaustRejectsStaleUnknownAndSecretsWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{{"stale generation", quotaRequest('a', "alpha", 99, 0)}, {"unknown profile", quotaRequest('a', "ghost", 1, 0)},
+		{"invalid operation id", strings.Replace(quotaRequest('a', "alpha", 1, 0), strings.Repeat("a", 64), "short", 1)},
+		{"access token", oauthRequest("quota.exhaust", 'a', `"profile":"alpha","generation":1,"access_token":"secret"`)},
+		{"refresh token", oauthRequest("quota.exhaust", 'a', `"profile":"alpha","generation":1,"refresh_token":"secret"`)}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			_, _, _ = invokeMachine(t, "credential.select", testMachineRequest)
+			before, _ := os.ReadFile(machineStateFile())
+			code, response, raw := invokeMachine(t, "quota.exhaust", test.input)
+			after, _ := os.ReadFile(machineStateFile())
+			check(t, code != 0 && response.Error != nil && string(before) == string(after), "response = %+v, exit = %d, state changed", response, code)
+			check(t, !strings.Contains(raw, "secret") && !strings.Contains(strings.ToLower(raw), "token"), "secret leaked: %s", raw)
+		})
+	}
+}
+
+func TestMachineQuotaExhaustCLIProcess(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	bin := filepath.Join(t.TempDir(), "acm")
+	output, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	check(t, err == nil, "build: %v\n%s", err, output)
+	selectCmd := exec.Command(bin, "machine", "v1", "credential.select")
+	selectCmd.Env, selectCmd.Stdin = append(os.Environ(), "HOME="+homeDir, "ACM_DIR="+acmDir), strings.NewReader(testMachineRequest)
+	selectedJSON, err := selectCmd.Output()
+	check(t, err == nil, "select: %v\n%s", err, selectedJSON)
+	var selected machineResponse
+	check(t, json.Unmarshal(selectedJSON, &selected) == nil, "decode selection: %s", selectedJSON)
+	cmd := exec.Command(bin, "machine", "v1", "quota.exhaust")
+	cmd.Env, cmd.Stdin = selectCmd.Env, strings.NewReader(quotaRequest('a', "alpha", selected.Generation, 0))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Run()
+	check(t, err == nil && stderr.Len() == 0 && strings.Contains(stdout.String(), `"ok":true`) && len(stdout.Bytes()) <= machineMaxOutputBytes, "exhaust: %v stdout=%s stderr=%s", err, &stdout, &stderr)
 }
