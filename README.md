@@ -58,6 +58,21 @@ alias cxp="acm run codex"    # codex exec con failover
 
 Flujo típico cuando la TUI anuncia "límite alcanzado": sales, `acm limit claude 16:00` (la hora que te dijo), vuelves a lanzar `cl` y sigues en la otra cuenta. Los cooldowns expiran solos.
 
+## OpenCode transparent failover
+
+El instalador incluye, pero deja **deshabilitado**, el adaptador experimental ES modules de `integrations/opencode/`. Solo admite Linux, perfiles ACM y la matriz fijada OpenCode 1.18.19 / SDK 1.17.12 / Claude CLI 2.1.236.
+La frontera estable es `acm machine v1 <operation>` por stdin/stdout, con entrada máxima de 64 KiB y salida máxima de 16 KiB. Implementa `credential.select`, `diagnostics.status`, `oauth.refresh.begin|commit|abort` y `quota.exhaust`. ACM selecciona el perfil y devuelve su directorio de configuración; el adaptador lee allí `.credentials.json`, mantiene el token solo en memoria, nunca escribe `auth.json` de OpenCode y nunca registra credenciales.
+La rotación es deliberadamente conservadora:
+- Requiere simultáneamente HTTP 429, el error tipado `rate_limit_error` y `anthropic-ratelimit-unified-status: rejected`. Un 429 genérico o cualquier 529 pasa sin cambios.
+- Enfriamiento y cuarentena son resultados distintos. ACM aplica su propia política de cooldown cuando no existe un reset válido; una cuarentena exige `acm login`.
+- Reintentos, backoff, esperas y continuidad de sesión pertenecen a OpenCode. El adaptador hace una sola llamada al proveedor por intento.
+Para habilitarla, cierre OpenCode y ejecute:
+
+```sh
+acm opencode enable --confirm
+```
+El comando valida `opencode.json` o `opencode.jsonc`, crea un respaldo con checksum y elimina `opencode-anthropic-login-via-cli` para mantener un único cargador Anthropic. Después reinicie OpenCode. Para volver a la configuración respaldada, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
+
 ## Cómo funciona
 
 - **Aislamiento**: cada perfil es un directorio; acm exporta `CLAUDE_CONFIG_DIR`/`CODEX_HOME` al lanzar. El perfil `principal` apunta al home por defecto **sin** exportar la variable (en claude, exportarla movería `~/.claude.json`).

@@ -16,6 +16,7 @@ set -eu
 REPO="Gefermanpernia/acm"
 VERSION="${ACM_VERSION:-latest}"
 BIN_DIR="${ACM_BIN_DIR:-$HOME/.local/bin}"
+SHARE_DIR="${ACM_SHARE_DIR:-$HOME/.local/share/acm}"
 
 say() { printf '%s\n' "$*"; }
 
@@ -58,6 +59,22 @@ chmod +x "$tmp"
 mv "$tmp" "$BIN_DIR/acm"
 trap - EXIT
 say "✓ acm instalado: $BIN_DIR/acm ($("$BIN_DIR/acm" version 2>/dev/null || echo ok))"
+
+plugin_tmp=$(mktemp -d)
+trap 'rm -rf "$plugin_tmp"' EXIT
+ref=main; [ "$VERSION" = latest ] || ref="$VERSION"
+for file in index.js machine.js oauth.js compat.js quota.js diagnostics.js compatibility.json package.json; do
+  raw="https://raw.githubusercontent.com/$REPO/$ref/integrations/opencode/$file"
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$raw" -o "$plugin_tmp/$file"
+  else wget -qO "$plugin_tmp/$file" "$raw"; fi
+done
+mkdir -p "$SHARE_DIR"
+rm -rf "$SHARE_DIR/.opencode-old"
+[ ! -d "$SHARE_DIR/opencode" ] || mv "$SHARE_DIR/opencode" "$SHARE_DIR/.opencode-old"
+mv "$plugin_tmp" "$SHARE_DIR/opencode"
+rm -rf "$SHARE_DIR/.opencode-old"
+trap - EXIT
+say "✓ adaptador OpenCode incluido (deshabilitado): $SHARE_DIR/opencode"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
