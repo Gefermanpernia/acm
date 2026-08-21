@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 
-const operations = new Set(["credential.select", "diagnostics.status", "oauth.refresh.begin", "oauth.refresh.commit", "oauth.refresh.abort"]);
+const operations = new Set([
+  "credential.select",
+  "diagnostics.status",
+  "oauth.refresh.begin",
+  "oauth.refresh.commit",
+  "oauth.refresh.abort",
+  "quota.exhaust",
+]);
 const maxOutput = 16 << 10;
 
 function failure(code) {

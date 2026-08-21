@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { assertCompatibility, operationId, transformRequest } from "./compat.js";
 import { runMachine } from "./machine.js";
 import { refreshCredentials } from "./oauth.js";
+import { handleQuotaResponse } from "./quota.js";
 import versions from "./compatibility.json" with { type: "json" };
 
 export function createPlugin(overrides = {}) {
@@ -21,7 +22,7 @@ export function createPlugin(overrides = {}) {
     }
     async function load(id) {
       const selection = await deps.machine("credential.select", { operation_id: id });
-      return credentials(selection, id);
+      return [selection, await credentials(selection, id)];
     }
     return {
       "chat.headers": async (input, output) => {
@@ -35,19 +36,29 @@ export function createPlugin(overrides = {}) {
             const request = new Request(input, init);
             const id = request.headers.get("x-acm-operation-id");
             if (!id) throw new Error("OpenCode operation identity is missing");
-            const auth = await load(id);
+            const [selection, auth] = await load(id);
             const headers = new Headers(request.headers);
             headers.delete("x-acm-operation-id");
             headers.delete("x-api-key");
             headers.set("authorization", `Bearer ${auth.access}`);
             let body;
             if (request.body && headers.get("content-type")?.includes("application/json")) body = JSON.stringify(transformRequest(await request.clone().json()));
-            return deps.send(new Request(request, body === undefined ? { headers } : { headers, body }));
+            const providerResponse = await deps.send(new Request(
+              request,
+              body === undefined ? { headers } : { headers, body },
+            ));
+            return handleQuotaResponse(providerResponse, {
+              operationID: id,
+              selection,
+            }, deps);
           },
         },
         methods: [{ type: "oauth", label: "ACM Claude profile", authorize: async () => ({
           url: "https://claude.ai", instructions: "Load the selected ACM profile.", method: "auto",
-          callback: async () => ({ type: "success", ...await load(operationId("opencode-auth", randomUUID())) }),
+          callback: async () => {
+            const [, auth] = await load(operationId("opencode-auth", randomUUID()));
+            return { type: "success", ...auth };
+          },
         }) }],
       },
     };
