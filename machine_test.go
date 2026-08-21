@@ -280,6 +280,20 @@ func TestMachineDiagnosticsAreBoundedRedactedAnd0600(t *testing.T) {
 	check(t, code == 0 && len(status.Diagnostics) == 64 && status.ActiveLeases == 0, "status = %+v, exit = %d", status, code)
 }
 
+func TestMachineLoginRecoveryFailsClosedOnPersistenceError(t *testing.T) {
+	setupMachineV1Test(t, "alpha", "beta")
+	initial := machineState{Generation: 7, Quarantined: []string{"alpha", "beta"}, Cooling: map[string]int64{"alpha": 11, "beta": 22}}
+	check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(initial) == nil, "seed recovery state")
+	before, _ := os.ReadFile(machineStateFile())
+	old := machinePersist
+	machinePersist = func(string, []byte) error { return errors.New("private persistence detail") }
+	t.Cleanup(func() { machinePersist = old })
+
+	check(t, recoverMachineProfile("alpha", 7) == 74, "persistence failure must fail closed")
+	after, _ := os.ReadFile(machineStateFile())
+	check(t, string(after) == string(before) && !strings.Contains(string(after), "private"), "failed recovery changed or leaked state: %s", after)
+}
+
 func TestMachineSelectDistinguishesCoolingAndQuarantinedProfiles(t *testing.T) {
 	now := time.Now().Unix()
 	tests := []struct {

@@ -29,6 +29,7 @@ var operationIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]{1,128}$`)
 var machineSync = (*os.File).Sync
 var machinePersist = atomicWriteMachineFile
+var errMachineStaleGeneration = errors.New("machine generation changed")
 
 type machineRequest struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -254,12 +255,16 @@ func machineStatus(req machineRequest) (map[string]any, int) {
 
 func recordMachineDiagnostic(req machineRequest) (response map[string]any, exit int) {
 	err := updateMachineState(func(state *machineState) error {
-		event := machineDiagnostic{Time: time.Now().UnixMilli(), Component: safeDiagnostic(req.Component, "quota", "oauth", "adapter"), Event: safeDiagnostic(req.Event, "transition", "refresh", "compatibility"), Outcome: safeDiagnostic(req.Outcome, "cooling", "quarantined", "unavailable", "failed"), Retryable: req.Retryable}
-		state.Diagnostics = pruneMachineDiagnostics(append(state.Diagnostics, event), event.Time)
+		appendMachineDiagnostic(state, req.Component, req.Event, req.Outcome, req.Retryable)
 		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "outcome": "recorded"}
 		return nil
 	})
 	return finishMachineState(req, response, exit, err)
+}
+
+func appendMachineDiagnostic(state *machineState, component, event, outcome string, retryable bool) {
+	record := machineDiagnostic{Time: time.Now().UnixMilli(), Component: safeDiagnostic(component, "quota", "oauth", "adapter"), Event: safeDiagnostic(event, "transition", "refresh", "compatibility", "recovery"), Outcome: safeDiagnostic(outcome, "cooling", "quarantined", "unavailable", "failed", "recovered"), Retryable: retryable}
+	state.Diagnostics = pruneMachineDiagnostics(append(state.Diagnostics, record), record.Time)
 }
 
 func safeDiagnostic(value string, allowed ...string) string {
@@ -419,8 +424,8 @@ func abortMachineRefresh(req machineRequest) (response map[string]any, exit int)
 		state.Leases = append(state.Leases[:index], state.Leases[index+1:]...)
 		terminal := req.Reason == "invalid_grant" || req.Reason == "revoked" || req.Reason == "unrecoverable"
 		outcome := "aborted"
-		if terminal && !slices.Contains(state.Quarantined, req.Profile) {
-			state.Quarantined, state.Generation = append(state.Quarantined, req.Profile), state.Generation+1
+		if terminal && mutateMachineProfileAvailability(state, req.Profile, true, 0) {
+			state.Generation++
 			outcome = "quarantined"
 		}
 		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "outcome": outcome, "generation": state.Generation}
@@ -459,10 +464,7 @@ func exhaustMachineQuota(req machineRequest) (response map[string]any, exit int)
 		if resetAt <= timestamp {
 			resetAt = timestamp + int64(defaultCooldownMin)*60
 		}
-		if state.Cooling == nil {
-			state.Cooling = make(map[string]int64)
-		}
-		state.Cooling[req.Profile] = resetAt
+		mutateMachineProfileAvailability(&state, req.Profile, false, resetAt)
 		record.Exhausted = append(record.Exhausted, req.Profile)
 		record.UpdatedAt = timestamp
 		operations[index] = record
@@ -475,6 +477,71 @@ func exhaustMachineQuota(req machineRequest) (response map[string]any, exit int)
 		return nil
 	})
 	return finishMachineState(req, response, exit, err)
+}
+
+func mutateMachineProfileAvailability(state *machineState, profile string, quarantine bool, resetAt int64) bool {
+	if resetAt > 0 {
+		if state.Cooling == nil {
+			state.Cooling = make(map[string]int64)
+		}
+		changed := state.Cooling[profile] != resetAt
+		state.Cooling[profile] = resetAt
+		return changed
+	}
+	index := slices.Index(state.Quarantined, profile)
+	if quarantine {
+		if index >= 0 {
+			return false
+		}
+		state.Quarantined = append(state.Quarantined, profile)
+		return true
+	}
+	if index < 0 {
+		return false
+	}
+	state.Quarantined = slices.Delete(state.Quarantined, index, index+1)
+	return true
+}
+
+func machineLoginState(profile string) (generation uint64, quarantined bool, exit int) {
+	err := withMachineState(func() error {
+		state, err := loadMachineState()
+		if err == nil {
+			generation, quarantined = state.Generation, slices.Contains(state.Quarantined, profile)
+		}
+		return err
+	})
+	return generation, quarantined, machineStateExit(err)
+}
+
+func recoverMachineProfile(profile string, generation uint64) int {
+	err := withMachineState(func() error {
+		state, err := loadMachineState()
+		if err != nil {
+			return err
+		}
+		if state.Generation != generation {
+			return errMachineStaleGeneration
+		}
+		if !mutateMachineProfileAvailability(&state, profile, false, 0) {
+			return nil
+		}
+		state.Operations = pruneMachineLedger(state.Operations, time.Now().Unix())
+		state.Generation++
+		appendMachineDiagnostic(&state, "oauth", "recovery", "recovered", false)
+		return saveMachineState(state)
+	})
+	return machineStateExit(err)
+}
+
+func machineStateExit(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, errMachineStaleGeneration) {
+		return 75
+	}
+	return 74
 }
 
 func machineQuotaResponse(req machineRequest, generation uint64, resetAt int64) map[string]any {

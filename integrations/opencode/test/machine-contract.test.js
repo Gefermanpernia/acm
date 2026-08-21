@@ -138,7 +138,8 @@ test("characterizes every adapter machine operation against the real binary", as
   assert.equal(coolingResponse.status, 429);
   assert.equal(coolingResponse.headers.get("retry-after"), "10");
 
-  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"] }));
+  const coolingState = { alpha: 1, beta: resetAt + 20 };
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"], cooling: coolingState }));
   const quarantined = invoke(binary, env, "credential.select", "2".repeat(64));
   assertError(quarantined, "credential.select", 69, "credential_quarantined", false);
   assert.match(quarantined.response.error.message, /acm login/);
@@ -146,6 +147,19 @@ test("characterizes every adapter machine operation against the real binary", as
   assert.equal(quarantinedResponse.status, 401);
   assert.equal(quarantinedResponse.headers.get("retry-after"), null);
   assert.deepEqual(await quarantinedResponse.json(), { action: "acm login", outcome: "quarantined", retryable: false });
+
+  const login = join(root, "synthetic-claude");
+  await writeFile(login, "#!/bin/sh\nprintf '%s\\n' '{\"claudeAiOauth\":{\"accessToken\":\"synthetic-new\",\"refreshToken\":\"synthetic-new\",\"expiresAt\":2000000000000}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\"\n", { mode: 0o700 });
+  const recovered = spawnSync(binary, ["login", "claude", "alpha"], { encoding: "utf8", env: { ...env, ACM_BIN_claude: login } });
+  assert.equal(recovered.status, 0, recovered.stderr);
+  assert.doesNotMatch(recovered.stdout + recovered.stderr, /old-access|old-refresh|synthetic-new|acm-machine-contract-|\/profiles\//);
+  const recoveredState = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(recoveredState.quarantined, ["beta"]);
+  assert.deepEqual(recoveredState.cooling, coolingState);
+  assert.deepEqual(recoveredState.diagnostics.at(-1), { time: recoveredState.diagnostics.at(-1).time, component: "oauth", event: "recovery", outcome: "recovered", retryable: false });
+  const selectedAgain = invoke(binary, env, "credential.select", "5".repeat(64));
+  assertContract(selectedAgain, "credential.select", { profile: "string", config_dir: "string", generation: "number" });
+  assert.equal(selectedAgain.response.profile, "alpha");
 
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"], cooling: { alpha: resetAt + 5, beta: resetAt + 15 } }));
   const mixed = invoke(binary, env, "credential.select", "3".repeat(64));
