@@ -1,38 +1,95 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createPlugin } from "../index.js";
+import { runMachine } from "../machine.js";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/quota.json", import.meta.url)));
+const repository = fileURLToPath(new URL("../../..", import.meta.url));
+const versions = { opencode: "1.18.19", sdk: "1.17.12", claude: "2.1.236" };
 
-test("returns cooling metadata after exactly one provider call", async () => {
-  const operations = [];
+test("maps real machine transitions without owning retry or continuation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "acm-quota-integration-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const binary = join(root, "acm");
+  const acmDir = join(root, "acm-state");
+  const stateDir = join(acmDir, "state");
+  const statePath = join(stateDir, "opencode-machine-v1.json");
+  const env = { ...process.env, HOME: join(root, "home"), ACM_DIR: acmDir,
+    ACM_OPENCODE_CONFIG_HOME: join(root, "opencode-config"), ACM_DEFAULT_COOLDOWN_MIN: "1" };
+  const build = spawnSync("go", ["build", "-o", binary, "."], { cwd: repository, encoding: "utf8" });
+  assert.equal(build.status, 0, build.stderr);
+  await mkdir(stateDir, { recursive: true });
+  const credential = (expiresAt) => JSON.stringify({ claudeAiOauth: {
+    accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt,
+  } });
+  for (const profile of ["alpha", "beta"]) {
+    const dir = join(acmDir, "profiles", "claude", profile);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, ".credentials.json"), credential(9999999999999), { mode: 0o600 });
+  }
+  const machineCalls = [];
+  const machine = async (operation, fields) => {
+    const response = await runMachine(operation, fields, { binary, env });
+    machineCalls.push([operation, fields, response]);
+    return response;
+  };
+  const attempt = async (session, now, send = async () => assert.fail("provider must not be called")) => {
+    const plugin = await createPlugin({ platform: "linux", versions, machine, now, send })();
+    const output = { headers: {} };
+    await plugin["chat.headers"]({ sessionID: session, message: { id: "message" } }, output);
+    const auth = await plugin.auth.loader(async () => ({ type: "oauth" }));
+    const response = await auth.fetch(new Request("https://example.invalid", { headers: output.headers }));
+    return { operationID: output.headers["x-acm-operation-id"], plugin, response };
+  };
+  const epoch = Math.floor(Date.now() / 1000);
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], cooling: { alpha: epoch + 90, beta: epoch + 120 } }));
+  const cooling = await attempt("cooling", () => epoch * 1000);
+  assert.equal(cooling.response.status, 429);
+  assert.equal(cooling.response.headers.get("retry-after"), "90");
+  t.diagnostic(`real binary cooling mapping: status=${cooling.response.status} retry-after=${cooling.response.headers.get("retry-after")}`);
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"] }));
+  const quarantined = await attempt("quarantined", () => epoch * 1000);
+  assert.equal(quarantined.response.status, 401);
+  assert.deepEqual(await quarantined.response.json(), { action: "acm login", outcome: "quarantined", retryable: false });
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"], cooling: { alpha: epoch + 30, beta: epoch + 150 } }));
+  const mixed = await attempt("mixed", () => epoch * 1000);
+  assert.equal(mixed.response.headers.get("retry-after"), "150");
+
+  await writeFile(statePath, JSON.stringify({ generation: 0, operations: [] }));
+  await writeFile(join(acmDir, "profiles", "claude", "alpha", ".credentials.json"), credential(1), { mode: 0o600 });
+  machineCalls.length = 0;
   let providerCalls = 0;
-  const plugin = await createPlugin({
-    platform: "linux",
-    versions: { opencode: "1.18.19", sdk: "1.17.12", claude: "2.1.236" },
-    read: async () => JSON.stringify(fixture.credentials),
-    machine: async (operation) => {
-      operations.push(operation);
-      return operation === "credential.select"
-        ? fixture.selection
-        : { outcome: "cooling", retry_after: 45 };
-    },
-    send: async () => {
-      providerCalls += 1;
-      return responseFor(fixture.confirmed);
-    },
-  })();
-  const output = { headers: {} };
-  await plugin["chat.headers"]({ sessionID: "session", message: { id: "message" } }, output);
-  const auth = await plugin.auth.loader(async () => ({ type: "oauth" }));
-  const result = await auth.fetch(new Request("https://example.invalid", { headers: output.headers }));
-
+  const refreshed = await attempt("refresh-quota", () => epoch * 1000, async (input) => {
+    if (typeof input === "string") return Response.json({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+    providerCalls += 1;
+    return responseFor(fixture.confirmed);
+  });
+  const quota = machineCalls.find(([operation]) => operation === "quota.exhaust");
   assert.equal(providerCalls, 1);
-  assert.deepEqual(operations, ["credential.select", "quota.exhaust"]);
-  assert.equal(result.status, 429);
-  assert.equal(result.headers.get("retry-after"), "45");
+  assert.equal(quota[1].generation, 2);
+  assert.equal(quota[2].generation, 3);
+  const replacement = await runMachine("credential.select", { operation_id: refreshed.operationID }, { binary, env });
+  assert.equal(replacement.profile, "beta");
+  assert.deepEqual(Object.keys(refreshed.plugin).sort(), ["auth", "chat.headers"]);
+  t.diagnostic(`real binary refresh/quota rotation: request-generation=${quota[1].generation} response-generation=${quota[2].generation} replacement=${replacement.profile}`);
+
+  const blocked = join(root, "blocked-acm-dir");
+  await writeFile(blocked, "not a directory");
+  env.ACM_DIR = blocked;
+  const unavailable = await attempt("unavailable", () => epoch * 1000);
+  assert.equal(unavailable.response.status, 503);
+  assert.deepEqual(await unavailable.response.json(), {
+    code: "state_unavailable", outcome: "unavailable", retryable: false,
+  });
 });
 
 function responseFor(value) {

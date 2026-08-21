@@ -34,8 +34,15 @@ function validReset(headers, now) {
     : undefined;
 }
 
-function retryResponse(transition) {
-  if (transition.outcome === "quarantined") {
+function retryAfter(resetAt, now) {
+  const current = Math.floor(now() / 1000);
+  return Number.isInteger(resetAt) && resetAt > current ? resetAt - current : undefined;
+}
+
+export function mapMachineResponse(value, now = Date.now) {
+  const detail = value?.error ?? value;
+  const code = /^[a-z][a-z0-9_]{0,63}$/.test(detail?.code ?? "") ? detail.code : "machine_failed";
+  if (code === "credential_quarantined") {
     return Response.json({
       action: "acm login",
       outcome: "quarantined",
@@ -43,13 +50,16 @@ function retryResponse(transition) {
     }, { status: 401 });
   }
   const headers = new Headers();
-  if (transition.outcome === "cooling" && Number.isInteger(transition.retry_after)) {
-    headers.set("retry-after", String(Math.max(0, transition.retry_after)));
+  const cooling = value?.outcome === "cooling" || code === "no_available_profile" && detail?.retryable === true;
+  const delay = retryAfter(value?.reset_at, now);
+  if (cooling && delay !== undefined) {
+    headers.set("retry-after", String(delay));
   }
   return Response.json({
-    outcome: transition.outcome,
-    retryable: true,
-  }, { status: 429, headers });
+    ...(cooling ? {} : { code }),
+    outcome: cooling ? "cooling" : "unavailable",
+    retryable: cooling || detail?.retryable === true,
+  }, { status: cooling ? 429 : 503, headers });
 }
 
 export async function handleQuotaResponse(response, context, dependencies) {
@@ -71,7 +81,7 @@ export async function handleQuotaResponse(response, context, dependencies) {
     transition = await dependencies.machine("quota.exhaust", request);
   } catch (error) {
     if (error?.code === "stale_generation") return response;
-    throw error;
+    return mapMachineResponse(error, dependencies.now ?? Date.now);
   }
   dependencies.diagnostic?.(redactDiagnostic({
     time: (dependencies.now ?? Date.now)(),
@@ -80,5 +90,5 @@ export async function handleQuotaResponse(response, context, dependencies) {
     outcome: transition.outcome,
     retryable: transition.outcome !== "quarantined",
   }));
-  return retryResponse(transition);
+  return mapMachineResponse(transition, dependencies.now ?? Date.now);
 }

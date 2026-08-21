@@ -19,11 +19,12 @@ export async function refreshCredentials(selection, operationID, source, depende
       throw new Error("Claude OAuth refresh failed");
     }
     const credentials = { access: body.access_token, refresh: body.refresh_token, expires: now() + body.expires_in * 1000 };
-    await machine("oauth.refresh.commit", {
+    const committed = await machine("oauth.refresh.commit", {
       ...common, lease_id: lease.lease_id, access_token: credentials.access,
       refresh_token: credentials.refresh, expires_at: credentials.expires,
     });
-    return credentials;
+    if (!Number.isInteger(committed.generation)) throw new Error("ACM refresh commit response is invalid");
+    return { ...credentials, generation: committed.generation };
   } catch (error) {
     if (!response) await machine("oauth.refresh.abort", { ...common, lease_id: lease.lease_id, reason: "transient" });
     throw error;

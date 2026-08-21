@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { mapMachineResponse } from "../quota.js";
+
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
 const common = {
   schema_version: "number", ok: "boolean", operation: "string", operation_id: "string",
@@ -126,16 +128,24 @@ test("characterizes every adapter machine operation against the real binary", as
   const cooling = invoke(binary, env, "credential.select", "1".repeat(64));
   assertError(cooling, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
   assert.equal(cooling.response.reset_at, resetAt + 10);
+  const coolingResponse = mapMachineResponse(cooling.response, () => resetAt * 1000);
+  assert.equal(coolingResponse.status, 429);
+  assert.equal(coolingResponse.headers.get("retry-after"), "10");
 
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"] }));
   const quarantined = invoke(binary, env, "credential.select", "2".repeat(64));
   assertError(quarantined, "credential.select", 69, "credential_quarantined", false);
   assert.match(quarantined.response.error.message, /acm login/);
+  const quarantinedResponse = mapMachineResponse(quarantined.response, () => resetAt * 1000);
+  assert.equal(quarantinedResponse.status, 401);
+  assert.equal(quarantinedResponse.headers.get("retry-after"), null);
+  assert.deepEqual(await quarantinedResponse.json(), { action: "acm login", outcome: "quarantined", retryable: false });
 
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"], cooling: { alpha: resetAt + 5, beta: resetAt + 15 } }));
   const mixed = invoke(binary, env, "credential.select", "3".repeat(64));
   assertError(mixed, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
   assert.equal(mixed.response.reset_at, resetAt + 15);
+  assert.equal(mapMachineResponse(mixed.response, () => resetAt * 1000).headers.get("retry-after"), "15");
   assertError(invoke(binary, env, "diagnostics.status", "short"), "diagnostics.status", 2, "invalid_request", false, "");
   assertError(invoke(binary, env, "oauth.refresh.begin", "b".repeat(64), {
     profile: "alpha", generation: 1,

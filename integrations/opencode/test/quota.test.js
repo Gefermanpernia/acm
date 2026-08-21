@@ -24,12 +24,13 @@ test("transitions only confirmed Anthropic quota rejection", async () => {
   }, {
     machine: async (operation, fields) => {
       calls.push([operation, fields]);
-      return { outcome: "replacement" };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000000 };
     },
+    now: () => 1999999955000,
   });
 
   assert.equal(result.status, 429);
-  assert.equal(result.headers.get("retry-after"), null);
+  assert.equal(result.headers.get("retry-after"), "45");
   assert.deepEqual(calls, [["quota.exhaust", {
     operation_id: operationID,
     profile: "alpha",
@@ -76,7 +77,7 @@ test("leaves fallback cooldown selection to ACM for an invalid reset", async () 
   }, {
     machine: async (_operation, fields) => {
       request = fields;
-      return { outcome: "replacement" };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000090 };
     },
   });
 
@@ -97,28 +98,6 @@ test("quarantines an unrecoverable refresh through the ACM lease", async () => {
 
   assert.deepEqual(calls.map(([operation]) => operation), ["oauth.refresh.begin", "oauth.refresh.abort"]);
   assert.equal(calls[1][1].reason, "unrecoverable");
-});
-
-test("reports cooling and quarantine as distinct retry outcomes", async () => {
-  const cooling = await handleQuotaResponse(responseFor(fixture.confirmed), {
-    operationID,
-    selection: fixture.selection,
-  }, { machine: async () => ({ outcome: "cooling", retry_after: 90 }) });
-  const quarantine = await handleQuotaResponse(responseFor(fixture.confirmed), {
-    operationID,
-    selection: fixture.selection,
-  }, { machine: async () => ({ outcome: "quarantined" }) });
-
-  assert.equal(cooling.status, 429);
-  assert.equal(cooling.headers.get("retry-after"), "90");
-  assert.deepEqual(await cooling.json(), { outcome: "cooling", retryable: true });
-  assert.equal(quarantine.status, 401);
-  assert.equal(quarantine.headers.get("retry-after"), null);
-  assert.deepEqual(await quarantine.json(), {
-    action: "acm login",
-    outcome: "quarantined",
-    retryable: false,
-  });
 });
 
 test("bounds diagnostics and excludes private inputs", () => {

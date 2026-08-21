@@ -28,11 +28,12 @@ test("applies the pinned Claude request transform", () => {
 test("refreshes through ACM begin and commit without an auth-file write", async () => {
   const calls = [];
   const result = await refreshCredentials({ profile: "alpha", generation: 7 }, "b".repeat(64), fixture.credentials.source.claudeAiOauth, {
-    machine: async (operation, body) => (calls.push([operation, body]), operation.endsWith("begin") ? { lease_id: "lease" } : { outcome: "committed" }),
+    machine: async (operation, body) => (calls.push([operation, body]), operation.endsWith("begin") ? { lease_id: "lease" } : { outcome: "committed", generation: 8 }),
     send: async () => new Response(JSON.stringify(fixture.credentials.response), { status: 200 }),
     now: () => 1000,
   });
   assert.equal(result.access, "new-access");
+  assert.equal(result.generation, 8);
   assert.deepEqual(calls.map(([operation]) => operation), ["oauth.refresh.begin", "oauth.refresh.commit"]);
 });
 
