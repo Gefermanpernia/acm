@@ -161,7 +161,7 @@ func selectMachineProfile(req machineRequest) (response map[string]any, exit int
 			return nil
 		}
 		if name == "" {
-			response, exit = machineFailure(req.Operation, req.OperationID, "no_available_profile", "no unattempted ACM profile is available", false), machineExitUnavailable
+			response, exit = machineUnavailableResponse(req, state, timestamp)
 			return nil
 		}
 		record.Profiles, record.UpdatedAt = append(record.Profiles, name), timestamp
@@ -181,6 +181,40 @@ func selectMachineProfile(req machineRequest) (response map[string]any, exit int
 		return machineFailure(req.Operation, req.OperationID, "state_busy", "ACM state is busy", true), 75
 	}
 	return machineFailure(req.Operation, req.OperationID, "state_unavailable", "ACM state is unavailable", false), 74
+}
+
+func machineUnavailableResponse(req machineRequest, state machineState, timestamp int64) (map[string]any, int) {
+	t, profileCount, quarantinedCount, resetAt := tools["claude"], 0, 0, int64(0)
+	for _, profile := range orderedProfiles(t, false) {
+		dir, err := canonicalMachineProfile(t, profile)
+		if err != nil {
+			return machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
+		}
+		if dir == "" {
+			continue
+		}
+		profileCount++
+		if slices.Contains(state.Quarantined, profile) {
+			quarantinedCount++
+			continue
+		}
+		until := state.Cooling[profile]
+		if legacy := cooldownUntil(t, profile); legacy > until {
+			until = legacy
+		}
+		if until > timestamp && (resetAt == 0 || until < resetAt) {
+			resetAt = until
+		}
+	}
+	if resetAt > 0 {
+		response := machineFailure(req.Operation, req.OperationID, "no_available_profile", "ACM profiles are cooling", true)
+		response["reset_at"] = resetAt
+		return response, 75
+	}
+	if profileCount > 0 && quarantinedCount == profileCount {
+		return machineFailure(req.Operation, req.OperationID, "credential_quarantined", "credential requires acm login", false), machineExitUnavailable
+	}
+	return machineFailure(req.Operation, req.OperationID, "no_available_profile", "no unattempted ACM profile is available", false), machineExitUnavailable
 }
 
 func machineStatus(req machineRequest) (map[string]any, int) {

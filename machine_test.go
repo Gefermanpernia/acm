@@ -25,7 +25,9 @@ type machineResponse struct {
 	Outcome    string `json:"outcome"`
 	ResetAt    int64  `json:"reset_at"`
 	Error      *struct {
-		Code string `json:"code"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		Retryable bool   `json:"retryable"`
 	} `json:"error"`
 }
 
@@ -246,6 +248,39 @@ func TestMachineLedgerIsOncePerProfileStaleAndBounded(t *testing.T) {
 	check(t, saveMachineState(state) == nil, "save state")
 	code, response, _ := invokeMachine(t, "credential.select", testMachineRequest)
 	check(t, code == 0, "stale operation was not reusable: %+v, exit = %d", response, code)
+}
+
+func TestMachineSelectDistinguishesCoolingAndQuarantinedProfiles(t *testing.T) {
+	now := time.Now().Unix()
+	tests := []struct {
+		name      string
+		state     machineState
+		exit      int
+		code      string
+		message   string
+		retryable bool
+		resetAt   int64
+	}{
+		{"all cooling uses earliest reset", machineState{Cooling: map[string]int64{"alpha": now + 300, "beta": now + 120}}, 75, "no_available_profile", "ACM profiles are cooling", true, now + 120},
+		{"all quarantined requires login", machineState{Quarantined: []string{"alpha", "beta"}, Cooling: map[string]int64{"alpha": now + 60}}, machineExitUnavailable, "credential_quarantined", "credential requires acm login", false, 0},
+		{"mixed ignores quarantined reset", machineState{Quarantined: []string{"alpha"}, Cooling: map[string]int64{"alpha": now + 60, "beta": now + 180}}, 75, "no_available_profile", "ACM profiles are cooling", true, now + 180},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha", "beta")
+			check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(test.state) == nil, "seed state")
+			code, response, raw := invokeMachine(t, "credential.select", testMachineRequest)
+			check(t, code == test.exit && response.Error != nil, "response = %+v, exit = %d", response, code)
+			check(t, response.Error.Code == test.code && response.Error.Message == test.message && response.Error.Retryable == test.retryable, "error = %+v", response.Error)
+			check(t, response.ResetAt == test.resetAt, "reset_at = %d, want %d", response.ResetAt, test.resetAt)
+			if test.resetAt == 0 {
+				check(t, !strings.Contains(raw, `"reset_at"`), "non-retryable response fabricated reset: %s", raw)
+			} else {
+				want := fmt.Sprintf("{\"error\":{\"code\":%q,\"message\":%q,\"retryable\":true},\"ok\":false,\"operation\":\"credential.select\",\"operation_id\":\"%s\",\"reset_at\":%d,\"schema_version\":1}\n", test.code, test.message, strings.Repeat("a", 64), test.resetAt)
+				check(t, raw == want, "non-canonical JSON:\n got %s want %s", raw, want)
+			}
+		})
+	}
 }
 
 func TestMachineCLIProcessBounds(t *testing.T) {

@@ -33,8 +33,8 @@ function assertContract(result, operation, fields, exit = 0, responseID = result
     .every((key) => Number.isInteger(result.response[key])), true);
 }
 
-function assertError(result, operation, exit, code, retryable, responseID) {
-  assertContract(result, operation, { error: "object" }, exit, responseID);
+function assertError(result, operation, exit, code, retryable, responseID, fields = {}) {
+  assertContract(result, operation, { error: "object", ...fields }, exit, responseID);
   assert.deepEqual(Object.keys(result.response.error).sort(), ["code", "message", "retryable"]);
   assert.equal(result.response.error.code, code);
   assert.equal(typeof result.response.error.message, "string");
@@ -74,6 +74,8 @@ test("characterizes every adapter machine operation against the real binary", as
     profile: "string", config_dir: "string", generation: "number",
   });
   assertAdapterFields(selected.response, { profile: "string", config_dir: "string", generation: "number" });
+  const unavailable = invoke(binary, env, "credential.select", "a".repeat(64));
+  assertError(unavailable, "credential.select", 69, "no_available_profile", false);
 
   const firstLease = invoke(binary, env, "oauth.refresh.begin", "b".repeat(64), {
     profile: "alpha", generation: selected.response.generation,
@@ -116,8 +118,24 @@ test("characterizes every adapter machine operation against the real binary", as
   const status = invoke(binary, env, "diagnostics.status", "f".repeat(64));
   assertContract(status, "diagnostics.status", { generation: "number" });
 
-  const unavailable = invoke(binary, env, "credential.select", "a".repeat(64));
-  assertError(unavailable, "credential.select", 69, "no_available_profile", false);
+  const betaDir = join(acmDir, "profiles", "claude", "beta");
+  await mkdir(betaDir, { recursive: true });
+  await writeFile(join(betaDir, ".credentials.json"), "{}", { mode: 0o600 });
+  const statePath = join(acmDir, "state", "opencode-machine-v1.json");
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], cooling: { alpha: resetAt + 20, beta: resetAt + 10 } }));
+  const cooling = invoke(binary, env, "credential.select", "1".repeat(64));
+  assertError(cooling, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
+  assert.equal(cooling.response.reset_at, resetAt + 10);
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"] }));
+  const quarantined = invoke(binary, env, "credential.select", "2".repeat(64));
+  assertError(quarantined, "credential.select", 69, "credential_quarantined", false);
+  assert.match(quarantined.response.error.message, /acm login/);
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"], cooling: { alpha: resetAt + 5, beta: resetAt + 15 } }));
+  const mixed = invoke(binary, env, "credential.select", "3".repeat(64));
+  assertError(mixed, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
+  assert.equal(mixed.response.reset_at, resetAt + 15);
   assertError(invoke(binary, env, "diagnostics.status", "short"), "diagnostics.status", 2, "invalid_request", false, "");
   assertError(invoke(binary, env, "oauth.refresh.begin", "b".repeat(64), {
     profile: "alpha", generation: 1,
@@ -127,6 +145,6 @@ test("characterizes every adapter machine operation against the real binary", as
   assertError(invoke(binary, { ...env, ACM_DIR: blocked }, "diagnostics.status", "f".repeat(64)),
     "diagnostics.status", 74, "state_unavailable", false);
 
-  const output = JSON.stringify([selected, firstLease, aborted, committed, exhausted, status, unavailable]);
+  const output = JSON.stringify([selected, firstLease, aborted, committed, exhausted, status, unavailable, cooling, quarantined, mixed]);
   assert.doesNotMatch(output, /old-access|old-refresh|new-access|new-refresh|access_token|refresh_token/);
 });
