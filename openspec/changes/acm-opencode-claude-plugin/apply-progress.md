@@ -4,9 +4,9 @@
 
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
-- Delivery: `auto-chain` / `stacked-to-main`
-- Current slice: R5 `Replacement-aware quota transition` (`feat/opencode-plugin-r5-replacement-aware`)
-- Target: `feat/opencode-plugin-r4b-login-recovery` under `stacked-to-main`
+- Delivery: `auto-chain` / `feature-branch-chain`
+- Current slice: R7 `Contract coherence` (`feat/opencode-plugin-r7-contract-coherence`)
+- Target: `feat/opencode-plugin-r6-compat-policy` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -442,3 +442,25 @@ None.
 | Runtime harness | Production import before: `REFUSED: unsupported OpenCode compatibility matrix`; after: `LOADED` (diagnostic recording failure remained non-blocking). |
 | Full gates | Node 24/24; formatting, vet, Go, race, and frozen-boundary commands exited 0. Authored slice: 55 additions + 138 deletions = 193/200; OpenSpec metadata excluded per prior slices. |
 | Rollback boundary | Restore the deleted matrix/checker and R5 versions of `compat.js`, `index.js`, package/fixture/tests; remove ADR 0001. |
+
+## R7 Contract Coherence
+- [x] 12.1 Added a RED contract guard proving package-range load with missing and `9.9.9` CLI evidence while rejecting the stale matrix requirement.
+- [x] 12.2 Amended auth R3 to retain quarantine and platform/profile/credential gates while making CLI detection diagnostic-only.
+- [x] 12.3 Amended ADR 0001 with the same-slice specification rule for future superseding compatibility decisions.
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 12.1 | `test/contract-coherence.test.js` | Structural + plugin factory | R6 compat 8/8 | 0/2; stale matrix and missing ADR rule | Implemented by 12.2–12.3; 2/2 | Missing CLI and `9.9.9` both load | Guard kept at public package/spec/ADR boundaries |
+| 12.2 | Same | Specification contract | 12.1 RED | Matrix language remained authoritative | 2/2 in `71.33182ms` | Hard gates and both diagnostic paths asserted | Requirement and scenario now match ADR 0001 |
+| 12.3 | Same | Decision coherence | 12.1 RED | ADR lacked same-slice rule | 2/2; Node 26/26 | Future supersession has an explicit guard | ADR and spec remain one rollback unit |
+### R7 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/contract-coherence.test.js` → exit 0; 2/2 passed in `71.33182ms` |
+| Runtime harness | Same command invoked the real plugin factory with missing and `9.9.9` CLI evidence; hooks loaded and diagnostics reported `unavailable`/`9.9.9` |
+| Neighbor/full adapter tests | R6 compatibility 8/8; full Node suite 26/26; both exit 0 |
+| Review budget | 74 additions + 12 deletions = 86/90 changed lines, including OpenSpec delivery metadata |
+| Rollback boundary | Remove the contract guard and revert only auth R3 plus ADR 0001's same-slice rule; R6 adapter behavior remains intact |
+
+## R7 Status
+42/54 planned tasks complete. R7 is ready for the R8 apply slice; R8–R11 remain pending.

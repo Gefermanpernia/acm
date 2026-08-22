@@ -134,9 +134,9 @@ Chain strategy: stacked-to-main
 Scope rule: slice by end-user capability and rollback boundary, including every producer and consumer; never exclude a consumer merely because it is another file.
 
 ## Phase 12: Contract Coherence (R7; C3)
-- [ ] 12.1 **RED**: add `contract-coherence.test.js` that fails while auth R3 requires a removed version matrix, but proves package-range load with missing/non-exact CLI evidence.
-- [ ] 12.2 **GREEN**: amend `specs/acm-opencode-claude-auth/spec.md` R3 to match ADR 0001: retain quarantine and hard platform/profile/credential gates; make CLI detection diagnostic-only.
-- [ ] 12.3 **REFACTOR**: keep the ADR and amended R3 in this decision-coherence slice; every future superseding compatibility decision MUST amend its spec in the same slice.
+- [x] 12.1 **RED**: add `contract-coherence.test.js` that fails while auth R3 requires a removed version matrix, but proves package-range load with missing/non-exact CLI evidence.
+- [x] 12.2 **GREEN**: amend `specs/acm-opencode-claude-auth/spec.md` R3 to match ADR 0001: retain quarantine and hard platform/profile/credential gates; make CLI detection diagnostic-only.
+- [x] 12.3 **REFACTOR**: keep the ADR and amended R3 in this decision-coherence slice; every future superseding compatibility decision MUST amend its spec in the same slice.
 
 ## Phase 13: Distribution Integrity (R8; C1)
 - [ ] 13.1 **RED**: add `install.test.js` offline fixture; it must fail on the stale `compatibility.json` request and assert the complete staged runtime asset set.
