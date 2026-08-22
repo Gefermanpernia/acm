@@ -18,18 +18,13 @@ test("maps real machine transitions without owning retry or continuation", async
   const acmDir = join(root, "acm-state");
   const stateDir = join(acmDir, "state");
   const statePath = join(stateDir, "opencode-machine-v1.json");
-  const opencodeRoot = join(root, "opencode");
-  const sdkRoot = join(opencodeRoot, "node_modules", "@opencode-ai", "sdk");
   const env = { ...process.env, HOME: join(root, "home"), ACM_DIR: acmDir,
     ACM_OPENCODE_CONFIG_HOME: join(root, "opencode-config"), ACM_DEFAULT_COOLDOWN_MIN: "1" };
   const build = spawnSync("go", ["build", "-o", binary, "."], { cwd: repository, encoding: "utf8" });
   assert.equal(build.status, 0, build.stderr);
-  await mkdir(sdkRoot, { recursive: true });
   await mkdir(stateDir, { recursive: true });
-  await writeFile(join(opencodeRoot, "package.json"), JSON.stringify({ name: "opencode-ai", version: "1.18.19" }));
-  await writeFile(join(sdkRoot, "package.json"), JSON.stringify({ name: "@opencode-ai/sdk", version: "1.17.12" }));
-  const versionIO = { execFile(command, _args, _options, callback) {
-    callback(null, command === "which" ? `${join(opencodeRoot, "bin", "opencode")}\n` : "2.1.236 (Claude Code)\n", "");
+  const versionIO = { execFile(_command, _args, _options, callback) {
+    callback(null, "2.1.236 (Claude Code)\n", "");
   } };
   const credential = (expiresAt) => JSON.stringify({ claudeAiOauth: {
     accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt,
@@ -81,7 +76,7 @@ test("maps real machine transitions without owning retry or continuation", async
     return responseFor(fixture.confirmed);
   });
   const quota = machineCalls.find(([operation]) => operation === "quota.exhaust");
-  const diagnostic = machineCalls.find(([operation]) => operation === "diagnostics.record");
+  const diagnostic = machineCalls.find(([operation, fields]) => operation === "diagnostics.record" && fields.component === "quota");
   assert.equal(providerCalls, 1);
   assert.equal(quota[1].generation, 2);
   assert.equal(quota[2].generation, 3);

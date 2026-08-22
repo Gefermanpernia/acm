@@ -1,5 +1,4 @@
 {
-  "versions": { "opencode": "1.18.19", "sdk": "1.17.12", "claude": "2.1.236" },
   "hash": {
     "session": "session-1",
     "message": "message-1",

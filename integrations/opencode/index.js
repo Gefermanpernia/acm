@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertCompatibility, operationId, resolveVersions, transformRequest } from "./compat.js";
+import { assertCompatibility, detectClaudeVersion, operationId, transformRequest } from "./compat.js";
 import { runMachine } from "./machine.js";
 import { refreshCredentials } from "./oauth.js";
 import { handleQuotaResponse, mapMachineResponse } from "./quota.js";
@@ -17,10 +17,11 @@ export function createPlugin(overrides = {}) {
     }
   };
   return async function AcmOpenCodePlugin() {
-    const observed = deps.platform === "linux" ? await resolveVersions(deps.versionIO) : {};
-    assertCompatibility(deps.platform, true, observed);
+    assertCompatibility(deps.platform, true);
+    const version = await detectClaudeVersion(deps.versionIO);
+    await Promise.resolve(deps.diagnostic({ component: "adapter", event: "compatibility", outcome: version ? "recovered" : "unavailable", retryable: false, version })).catch(() => deps.diagnosticError("record_failed"));
     async function credentials(selection, id) {
-      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir), observed);
+      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir));
       const document = JSON.parse(await deps.read(join(selection.config_dir, ".credentials.json"), "utf8"));
       const source = document?.claudeAiOauth;
       if (typeof source?.accessToken !== "string" || typeof source?.refreshToken !== "string" || typeof source?.expiresAt !== "number") {

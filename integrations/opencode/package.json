@@ -7,7 +7,9 @@
     ".": "./index.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "check:compat": "node scripts/check-compat.js"
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.18"
   }
 }
