@@ -1,0 +1,72 @@
+schema: spec-driven
+
+context: |
+  Stack: Go 1.26 standard-library CLI with a legacy shell implementation.
+  Integration: ESM JavaScript OpenCode adapter under integrations/opencode/.
+  Architecture: Profile-based local state under ~/.acm; machine JSON boundary for integrations.
+  Testing: Go testing and Bun test declarations; no E2E or CI configuration detected.
+  Style: Existing implementation and documentation include Spanish user-facing text; SDD artifacts are English.
+strict_tdd: true
+
+testing:
+  strict_tdd: true
+  detected: 2026-08-20
+  runners:
+    - command: go test ./...
+      framework: Go testing
+      available: true
+    - command: (cd integrations/opencode && bun test)
+      framework: Bun test
+      available: false
+      note: Bun is declared by package.json but is not installed in the current environment.
+  layers:
+    unit:
+      available: true
+      tools: Go testing; Bun test declarations
+    integration:
+      available: false
+      tools: —
+    e2e:
+      available: false
+      tools: —
+  coverage:
+    available: true
+    command: go test -cover ./...
+    note: No coverage threshold or CI coverage gate detected.
+  quality:
+    linter:
+      available: false
+      command: —
+    type_checker:
+      available: true
+      command: go test ./...
+      note: Go compiler type-checking is available; no separate JS type checker is configured.
+    formatter:
+      available: true
+      command: gofmt -w .
+      note: No JavaScript formatter configuration detected.
+
+rules:
+  proposal:
+    - Include a rollback plan for risky changes.
+  specs:
+    - Use Given/When/Then scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+  design:
+    - Include sequence diagrams for complex flows.
+    - Document architecture decisions with rationale.
+  tasks:
+    - Group by phase and use hierarchical numbering.
+    - Keep tasks completable in one session.
+  apply:
+    guidelines:
+      - Preserve existing ACM state-file compatibility and secretless machine responses.
+      - Treat pre-existing dirty worktree changes as repository state, not approved SDD implementation.
+    tdd: true
+    test_command: go test ./...
+  verify:
+    test_command: go test ./...
+    build_command: go build ./...
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.

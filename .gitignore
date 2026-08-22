@@ -1,3 +1,4 @@
 dist/
 # Local AI runtime state
 .atl/
+.codegraph/
