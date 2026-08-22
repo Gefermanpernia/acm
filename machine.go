@@ -449,7 +449,7 @@ func exhaustMachineQuota(req machineRequest) (response map[string]any, exit int)
 		}
 		record := operations[index]
 		if slices.Contains(record.Exhausted, req.Profile) {
-			response = machineQuotaResponse(req, state.Generation, state.Cooling[req.Profile])
+			response, exit = machineQuotaResponse(req, state, record, timestamp, state.Cooling[req.Profile])
 			return nil
 		}
 		if dir, pathErr := canonicalMachineProfile(tools["claude"], req.Profile); pathErr != nil || dir == "" || !slices.Contains(record.Profiles, req.Profile) {
@@ -470,10 +470,13 @@ func exhaustMachineQuota(req machineRequest) (response map[string]any, exit int)
 		operations[index] = record
 		state.Operations = operations
 		state.Generation++
+		response, exit = machineQuotaResponse(req, state, record, timestamp, resetAt)
+		if exit != 0 {
+			return nil
+		}
 		if err = saveMachineState(state); err != nil {
 			return err
 		}
-		response = machineQuotaResponse(req, state.Generation, resetAt)
 		return nil
 	})
 	return finishMachineState(req, response, exit, err)
@@ -544,9 +547,13 @@ func machineStateExit(err error) int {
 	return 74
 }
 
-func machineQuotaResponse(req machineRequest, generation uint64, resetAt int64) map[string]any {
+func machineQuotaResponse(req machineRequest, state machineState, record machineOperation, timestamp, resetAt int64) (map[string]any, int) {
+	replacement, _, err := nextMachineProfile(tools["claude"], record.Profiles, state.Quarantined, state.Cooling, timestamp)
+	if err != nil {
+		return machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
+	}
 	return map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID,
-		"outcome": "cooling", "generation": generation, "reset_at": resetAt}
+		"outcome": "cooling", "generation": state.Generation, "reset_at": resetAt, "replacement_available": replacement != ""}, 0
 }
 
 func canonicalMachineProfile(t *tool, name string) (string, error) {

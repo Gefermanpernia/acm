@@ -59,12 +59,13 @@ test("maps real machine transitions without owning retry or continuation", async
   const cooling = await attempt("cooling", () => epoch * 1000);
   assert.equal(cooling.response.status, 429);
   assert.equal(cooling.response.headers.get("retry-after"), "90");
-  t.diagnostic(`real binary cooling mapping: status=${cooling.response.status} retry-after=${cooling.response.headers.get("retry-after")}`);
+  t.diagnostic(`real binary cooling mapping: status=${cooling.response.status} headers=${JSON.stringify(Object.fromEntries(cooling.response.headers))}`);
 
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha", "beta"] }));
   const quarantined = await attempt("quarantined", () => epoch * 1000);
   assert.equal(quarantined.response.status, 401);
   assert.deepEqual(await quarantined.response.json(), { action: "acm login", outcome: "quarantined", retryable: false });
+  t.diagnostic(`real binary quarantined mapping: status=${quarantined.response.status} headers=${JSON.stringify(Object.fromEntries(quarantined.response.headers))}`);
 
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"], cooling: { alpha: epoch + 30, beta: epoch + 150 } }));
   const mixed = await attempt("mixed", () => epoch * 1000);
@@ -84,11 +85,22 @@ test("maps real machine transitions without owning retry or continuation", async
   assert.equal(providerCalls, 1);
   assert.equal(quota[1].generation, 2);
   assert.equal(quota[2].generation, 3);
+  assert.equal(refreshed.response.headers.get("retry-after"), null);
+  t.diagnostic(`real binary replacement mapping: status=${refreshed.response.status} headers=${JSON.stringify(Object.fromEntries(refreshed.response.headers))}`);
   assert.deepEqual(diagnostic[1], { operation_id: diagnostic[1].operation_id, component: "quota", event: "transition", outcome: "cooling", retryable: true });
   const replacement = await runMachine("credential.select", { operation_id: refreshed.operationID }, { binary, env });
   assert.equal(replacement.profile, "beta");
   assert.deepEqual(Object.keys(refreshed.plugin).sort(), ["auth", "chat.headers"]);
   t.diagnostic(`real binary refresh/quota rotation: request-generation=${quota[1].generation} response-generation=${quota[2].generation} replacement=${replacement.profile}`);
+
+  for (const status of [401, 429, 529]) {
+    await writeFile(statePath, JSON.stringify({ generation: 0, operations: [] }));
+    const original = Response.json({ error: { type: "overloaded_error" } }, { status });
+    const passthrough = await attempt(`passthrough-${status}`, () => epoch * 1000, async () => original);
+    assert.equal(passthrough.response, original);
+    assert.equal(passthrough.response.headers.get("retry-after"), null);
+    t.diagnostic(`real binary unconfirmed passthrough: status=${passthrough.response.status} headers=${JSON.stringify(Object.fromEntries(passthrough.response.headers))}`);
+  }
 
   const blocked = join(root, "blocked-acm-dir");
   await writeFile(blocked, "not a directory");

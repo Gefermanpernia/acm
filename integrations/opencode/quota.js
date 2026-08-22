@@ -44,34 +44,34 @@ function retryAfter(resetAt, now) {
 }
 
 export function mapMachineResponse(value, now = Date.now) {
+  if (value instanceof Response) return value;
   const detail = value?.error ?? value;
   const code = /^[a-z][a-z0-9_]{0,63}$/.test(detail?.code ?? "") ? detail.code : "machine_failed";
-  if (code === "credential_quarantined") {
-    return Response.json({
-      action: "acm login",
-      outcome: "quarantined",
-      retryable: false,
-    }, { status: 401 });
-  }
-  const headers = new Headers();
+  const quarantined = code === "credential_quarantined";
   const cooling = value?.outcome === "cooling" || code === "no_available_profile" && detail?.retryable === true;
+  const headers = new Headers();
   const delay = retryAfter(value?.reset_at, now);
-  if (cooling && delay !== undefined) {
+  if (cooling && value?.replacement_available !== true && delay !== undefined) {
     headers.set("retry-after", String(delay));
   }
-  return Response.json({
+  const body = quarantined ? {
+    action: "acm login",
+    outcome: "quarantined",
+    retryable: false,
+  } : {
     ...(cooling ? {} : { code }),
     outcome: cooling ? "cooling" : "unavailable",
     retryable: cooling || detail?.retryable === true,
-  }, { status: cooling ? 429 : 503, headers });
+  };
+  return Response.json(body, { status: quarantined ? 401 : cooling ? 429 : 503, headers });
 }
 
 export async function handleQuotaResponse(response, context, dependencies) {
-  if (response.status !== 429) return response;
+  if (response.status !== 429) return mapMachineResponse(response);
   const evidence = await readEvidence(response);
   if (evidence?.error?.type !== "rate_limit_error" ||
       response.headers.get("anthropic-ratelimit-unified-status") !== "rejected") {
-    return response;
+    return mapMachineResponse(response);
   }
   const request = {
     operation_id: context.operationID,
@@ -84,7 +84,7 @@ export async function handleQuotaResponse(response, context, dependencies) {
   try {
     transition = await dependencies.machine("quota.exhaust", request);
   } catch (error) {
-    if (error?.code === "stale_generation") return response;
+    if (error?.code === "stale_generation") return mapMachineResponse(response);
     return mapMachineResponse(error, dependencies.now ?? Date.now);
   }
   const diagnostic = redactDiagnostic({

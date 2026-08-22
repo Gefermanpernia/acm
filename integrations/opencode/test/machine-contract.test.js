@@ -104,19 +104,33 @@ test("characterizes every adapter machine operation against the real binary", as
   assertContract(committed, "oauth.refresh.commit", { outcome: "string", generation: "number" });
   assert.equal(committed.response.outcome, "committed");
 
+  const betaDir = join(acmDir, "profiles", "claude", "beta");
+  await mkdir(betaDir, { recursive: true });
+  await writeFile(join(betaDir, ".credentials.json"), "{}", { mode: 0o600 });
   const resetAt = 2000000000;
   const exhausted = invoke(binary, env, "quota.exhaust", "a".repeat(64), {
     profile: "alpha", generation: committed.response.generation, reset_at: resetAt,
   });
   assertContract(exhausted, "quota.exhaust", {
-    outcome: "string", generation: "number", reset_at: "number",
+    outcome: "string", generation: "number", reset_at: "number", replacement_available: "boolean",
   });
   assert.equal(exhausted.response.outcome, "cooling");
   assert.equal(exhausted.response.reset_at, resetAt);
+  assert.equal(exhausted.response.replacement_available, true);
   assertAdapterFields(exhausted.response, { outcome: "string" });
   assert.throws(() => assertContract(exhausted, "quota.exhaust", {
     outcome: "string", generation: "number", retry_after: "number",
-  }), { code: "ERR_ASSERTION" });
+  }), { code: "ERR_ASSERTION", message: /retry_after/ });
+
+  const replacement = invoke(binary, env, "credential.select", "a".repeat(64));
+  assert.equal(replacement.response.profile, "beta");
+  const fullyExhausted = invoke(binary, env, "quota.exhaust", "a".repeat(64), {
+    profile: "beta", generation: replacement.response.generation, reset_at: resetAt + 10,
+  });
+  assertContract(fullyExhausted, "quota.exhaust", {
+    outcome: "string", generation: "number", reset_at: "number", replacement_available: "boolean",
+  });
+  assert.equal(fullyExhausted.response.replacement_available, false);
 
   const recorded = invoke(binary, env, "diagnostics.record", "0".repeat(64), { component: profileDir, event: secrets[0], outcome: "private-identifier", retryable: true });
   assertContract(recorded, "diagnostics.record", { outcome: "string" });
@@ -127,9 +141,6 @@ test("characterizes every adapter machine operation against the real binary", as
   assertError(invoke(binary, env, "diagnostics.record", "4".repeat(64), { body: { refresh_token: secrets[1], request: "private-request-body" } }), "diagnostics.record", 2, "invalid_request", false, "");
   assert.doesNotMatch(await readFile(statePath, "utf8"), /old-access|old-refresh|private-request-body|private-identifier|acm-machine-contract-|\/profiles\//);
 
-  const betaDir = join(acmDir, "profiles", "claude", "beta");
-  await mkdir(betaDir, { recursive: true });
-  await writeFile(join(betaDir, ".credentials.json"), "{}", { mode: 0o600 });
   await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], cooling: { alpha: resetAt + 20, beta: resetAt + 10 } }));
   const cooling = invoke(binary, env, "credential.select", "1".repeat(64));
   assertError(cooling, "credential.select", 75, "no_available_profile", true, undefined, { reset_at: "number" });
