@@ -7,11 +7,11 @@
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 → PR 2 → PR 3 → PR 4 → PR 5 |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Work Units
@@ -60,11 +60,11 @@ Chain strategy: stacked-to-main
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | R1 → R2 → R3 → R4 |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Remediation Work Units
@@ -124,11 +124,11 @@ Round-2 verification found that `machineQuotaResponse` always reports `outcome: 
 | Estimated changed lines | 780–960 across five PRs |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 Scope rule: slice by end-user capability and rollback boundary, including every producer and consumer; never exclude a consumer merely because it is another file.
@@ -139,9 +139,9 @@ Scope rule: slice by end-user capability and rollback boundary, including every 
 - [x] 12.3 **REFACTOR**: keep the ADR and amended R3 in this decision-coherence slice; every future superseding compatibility decision MUST amend its spec in the same slice.
 
 ## Phase 13: Distribution Integrity (R8; C1)
-- [ ] 13.1 **RED**: add `install.test.js` offline fixture; it must fail on the stale `compatibility.json` request and assert the complete staged runtime asset set.
-- [ ] 13.2 **GREEN**: update `install.sh` to fetch only shipped adapter assets and stage them atomically in the fixture’s `ACM_SHARE_DIR`.
-- [ ] 13.3 **REFACTOR**: make fixture cleanup assert no host paths, aliases, credentials, or real installer targets were touched.
+- [x] 13.1 **RED**: add `install.test.js` offline fixture; it must fail on the stale `compatibility.json` request and assert the complete staged runtime asset set.
+- [x] 13.2 **GREEN**: update `install.sh` to fetch only shipped adapter assets and stage them atomically in the fixture’s `ACM_SHARE_DIR`.
+- [x] 13.3 **REFACTOR**: make fixture cleanup assert no host paths, aliases, credentials, or real installer targets were touched.
 
 ## Phase 14: Guided Migration (R9; C2)
 - [ ] 14.1 **RED**: correct `opencode_lifecycle_test.go`: both plugins plus `--confirm` exits nonzero, preserves bytes, and creates no backup; `--replace-upstream` is required.

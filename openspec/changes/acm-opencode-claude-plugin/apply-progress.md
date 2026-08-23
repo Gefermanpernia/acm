@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R7 `Contract coherence` (`feat/opencode-plugin-r7-contract-coherence`)
-- Target: `feat/opencode-plugin-r6-compat-policy` under `feature-branch-chain`
+- Current slice: R8 `Distribution integrity` (`feat/opencode-plugin-r8-distribution-integrity`)
+- Target: `feat/opencode-plugin-r7-contract-coherence` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -464,3 +464,29 @@ None.
 
 ## R7 Status
 42/54 planned tasks complete. R7 is ready for the R8 apply slice; R8–R11 remain pending.
+
+## R8 Distribution Integrity
+- [x] 13.1 Added an offline installer fixture that runs the real `install.sh` with fake `curl` and `acm`, fails on missing shipped assets, and asserts the complete staged runtime bundle.
+- [x] 13.2 Removed the stale `compatibility.json` fetch and moved a fully downloaded hidden staging directory into `ACM_SHARE_DIR/opencode`, with prior-bundle restoration on interrupted replacement.
+- [x] 13.3 Added cleanup-time host canaries for aliases, credentials, OpenCode configuration, and default install targets; cleanup also proves the entire temporary fixture tree is deleted.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 13.1 | `test/install.test.js` | Installer process integration | Node 26/26 | Exit 1; installer returned 22 with `fixture: missing shipped asset compatibility.json` | Implemented by 13.2; focused 1/1 | Complete seven-asset bundle plus staged-fetch rejection | Fixture owns every process, filesystem, and network boundary |
+| 13.2 | `install.sh` + fixture | Distribution transaction | 13.1 RED | Stale eighth asset aborted before bundle placement | Focused 1/1; staged factory exposed `auth` and `chat.headers` | Success replaces the bundle; rejected `quota.js` fetch preserves it byte-for-byte | Hidden same-share staging and prior-bundle restoration keep partial files unreachable |
+| 13.3 | `test/install.test.js` | Isolation/security refactor | Focused GREEN | Host-safety assertions were written before installer changes | Focused and full Node suites pass | Host canaries and sandbox state exercise distinct negative boundaries | Cleanup asserts canaries unchanged, logs contain only sandbox targets, `.acm` is absent, and the fixture root is removed |
+
+### R8 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/install.test.js` → exit 0; 1/1 passed; final run `182.193158ms` |
+| RED evidence | Same command before `install.sh` changed → exit 1; 0/1 passed; actual installer exit 22; stderr `fixture: missing shipped asset compatibility.json` |
+| Runtime harness | The focused test executes the real `sh install.sh` twice with temp `HOME`, `ACM_BIN_DIR`, `ACM_SHARE_DIR`, and `TMPDIR`; fake `curl` serves repository bytes offline, fake `acm` handles `version`/`init`, and the staged factory loads both public hooks |
+| Regression suite | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 27/27 passed; `990.875044ms` |
+| Host isolation | Cleanup re-reads six byte-identical host canaries covering `.bashrc`, `.zshrc`, credentials, OpenCode config, default binary, and default plugin; the command log must exclude host-home and include only sandbox HOME/BIN/SHARE; sandbox `.acm` must not exist; final `access(root)` must return `ENOENT` |
+| Static checks | `sh -n install.sh && git diff --check` → exit 0; no output |
+| Rollback boundary | Revert only `install.sh`, `integrations/opencode/test/install.test.js`, and R8 task/progress metadata; R7 and all machine, migration, outcome, and local-auth behavior remain unchanged |
+
+## R8 Status
+45/54 planned tasks complete. R8 closes round-4 C1 and is ready for SDD verification; R9–R11 remain pending.
