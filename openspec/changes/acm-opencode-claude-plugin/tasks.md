@@ -149,9 +149,9 @@ Scope rule: slice by end-user capability and rollback boundary, including every 
 - [x] 14.3 **REFACTOR**: share plugin-conflict detection without weakening checksum, ambiguity, or rollback guards.
 
 ## Phase 15: Outcome and Durability Boundary (R10; W1/W2/W3/W7/S1)
-- [ ] 15.1 **RED**: extend real-binary guards for cooling/no replacement, begin-quarantine, busy, invalid lease, unknown operation, dispatcher invalid operation, and directory-sync-after-rename.
-- [ ] 15.2 **GREEN**: fsync the parent directory; map retryable busy/invalid-lease 503s with bounded retry signal, preserve non-retryable codes, and document all 503 outcomes in `design.md`.
-- [ ] 15.3 **REFACTOR**: centralize outcome mapping; model `replacement_available:false` explicitly in fixtures and retain mutation guards.
+- [x] 15.1 **RED**: extend real-binary guards for cooling/no replacement, begin-quarantine, busy, invalid lease, unknown operation, dispatcher invalid operation, and directory-sync-after-rename.
+- [x] 15.2 **GREEN**: fsync the parent directory; map retryable busy/invalid-lease 503s with bounded retry signal, preserve non-retryable codes, and document all 503 outcomes in `design.md`.
+- [x] 15.3 **REFACTOR**: centralize outcome mapping; model `replacement_available:false` explicitly in fixtures and retain mutation guards.
 
 ## Phase 16: Local Auth Error Containment (R11; W6)
 - [ ] 16.1 **RED**: add missing-credential and valid-control cases in `quota-integration.test.js`; assert `auth.fetch` exposes neither temp path nor credential identifier.

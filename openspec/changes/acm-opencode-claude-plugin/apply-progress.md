@@ -516,3 +516,29 @@ None.
 
 ## R9 Status
 48/54 planned tasks complete. R9 closes round-4 C2; R10–R11 remain pending.
+
+## R10 Outcome and Durability Boundary
+- [x] 15.1 Extended the compiled-binary guards for quota cooling without a replacement, refresh-begin quarantine, state contention, invalid leases, unknown logical operations, dispatcher-invalid operations, and parent-directory sync after rename.
+- [x] 15.2 Synced the parent directory after atomic rename, added bounded `Retry-After: 1` to retryable 503 outcomes, retained exact non-retryable codes, and documented every 503 class in `design.md`.
+- [x] 15.3 Centralized adapter outcome classification, made every synthetic cooling fixture state `replacement_available: false` explicitly, and retained exact-key, secretlessness, and mutation guards.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 15.1 | `machine_test.go`, `test/{machine-contract,quota-integration}.test.js` | Go filesystem + compiled-binary adapter | Go machine, machine contract, and quota integration all passed before edits | Directory guard failed with `sync order = [file]`; adapter guard reported both `invalid_lease: null !== 1` and `state_busy: null !== 1`; targeted mutations made cooling/no-replacement, begin-quarantine, unknown-operation, and dispatcher-invalid guards fail on their exact changed contract | Implemented by 15.2; all three focused commands passed | Real binary induced all six machine outcomes; Go seam proved file-sync → rename → directory-sync order | Existing exact-key, exit-taxonomy, mutation, and secret-absence assertions remain intact |
+| 15.2 | Same + `design.md` | Durability + response mapping | 15.1 RED captured before production edits | Missing parent sync and missing bounded retry headers failed for their intended reasons | `go test -run TestMachine .` and both required Node guards passed | Retryable 503s carry `Retry-After: 1`; non-retryable 503s retain code/no header; cooling replacement/no-replacement and quarantine remain distinct | 503 policy is documented exhaustively without changing exit codes |
+| 15.3 | `test/{machine-contract,quota-integration,quota}.test.js` | Approval/refactor | Focused GREEN passed before extraction | N/A: behavior-preserving extraction used the passing outcome matrix; no artificial RED | Focused Go, compiled-binary Node, quota fixtures, and full regressions remained green | Fixtures state `replacement_available: false`; real binary separately proves `true` and `false` | `machineOutcome` owns status/body/retry classification; diff review found no out-of-scope behavior change |
+
+### R10 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -run TestMachine .` → exit 0, package `3.242s`; machine contract → 1/1 passed in `897.017319ms`; quota integration → 1/1 passed in `946.037735ms` |
+| Runtime harness | Both Node guards build the real `acm` under temporary roots. They induced cooling with and without a replacement, begin quarantine, lock contention, invalid lease, unknown operation, dispatcher invalid operation, and mapped every captured envelope through production adapter code. |
+| Regression suite | `go test ./...` → exit 0, package `11.967s`; `node --test "integrations/opencode/test/*.test.js"` → exit 0, 27/27 passed in `1105.952962ms` |
+| Static checks | `gofmt -l`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | Verification exported temporary `HOME`, `ACM_DIR`, `ACM_OPENCODE_CONFIG_HOME`, `TMPDIR`, and `GOCACHE`; binaries, state, lock files, credentials, and caches stayed under the temporary root and cleanup was trap/test-owned. No real profile or credential path was addressed. |
+| Retry regression | Replacement-available quota remained `429` with no `Retry-After`; no-replacement quota remained `429` with an explicit reset-derived header. |
+| Rollback boundary | Revert R10 changes in `machine.go`, `machine_test.go`, `integrations/opencode/{quota.js,test/machine-contract.test.js,test/quota-integration.test.js,test/quota.test.js}`, `design.md`, and Phase 15 task/progress metadata. R9 migration and R11 local-auth handling remain untouched. |
+
+## R10 Status
+51/54 planned tasks complete. R10 closes W1, W2, W3, W7, and S1; R11 remains pending and was not started.

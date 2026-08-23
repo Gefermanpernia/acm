@@ -88,6 +88,15 @@ test("maps real machine transitions without owning retry or continuation", async
   assert.deepEqual(Object.keys(refreshed.plugin).sort(), ["auth", "chat.headers"]);
   t.diagnostic(`real binary refresh/quota rotation: request-generation=${quota[1].generation} response-generation=${quota[2].generation} replacement=${replacement.profile}`);
 
+  const fullyExhausted = await attempt("quota-no-replacement", () => epoch * 1000,
+    async () => responseFor(fixture.confirmed));
+  assert.equal(fullyExhausted.response.status, 429);
+  assert.equal(fullyExhausted.response.headers.get("retry-after"), String(2000000000 - epoch));
+  assert.deepEqual(await fullyExhausted.response.json(), { outcome: "cooling", retryable: true });
+  const finalQuota = machineCalls.filter(([operation]) => operation === "quota.exhaust").at(-1);
+  assert.equal(finalQuota[2].replacement_available, false);
+  t.diagnostic(`real binary no-replacement mapping: status=${fullyExhausted.response.status} headers=${JSON.stringify(Object.fromEntries(fullyExhausted.response.headers))}`);
+
   for (const status of [401, 429, 529]) {
     await writeFile(statePath, JSON.stringify({ generation: 0, operations: [] }));
     const original = Response.json({ error: { type: "overloaded_error" } }, { status });

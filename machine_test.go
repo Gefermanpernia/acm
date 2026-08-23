@@ -146,6 +146,28 @@ func TestOAuthRefreshCommitIsAtomic0600AndSecretless(t *testing.T) {
 	check(t, len(temps) == 0 && !strings.Contains(raw+string(state), "new-access") && !strings.Contains(raw+string(state), "new-refresh"), "secret or temporary file escaped commit")
 }
 
+func TestMachineAtomicWriteSyncsParentAfterRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	oldSync := machineSync
+	t.Cleanup(func() { machineSync = oldSync })
+	var syncs []string
+	machineSync = func(file *os.File) error {
+		info, err := file.Stat()
+		check(t, err == nil, "stat sync target: %v", err)
+		if info.IsDir() {
+			_, err = os.Stat(path)
+			check(t, err == nil, "directory synced before rename: %v", err)
+			syncs = append(syncs, "directory")
+		} else {
+			syncs = append(syncs, "file")
+		}
+		return nil
+	}
+	check(t, atomicWriteMachineFile(path, []byte("durable\n")) == nil, "atomic write")
+	check(t, slices.Equal(syncs, []string{"file", "directory"}), "sync order = %v", syncs)
+}
+
 func TestOAuthRefreshAbortQuarantinesOnlyTerminalReasons(t *testing.T) {
 	tests := []struct {
 		reason      string
