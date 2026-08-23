@@ -490,3 +490,29 @@ None.
 
 ## R8 Status
 45/54 planned tasks complete. R8 closes round-4 C1 and is ready for SDD verification; R9–R11 remain pending.
+
+## R9 Guided Migration
+- [x] 14.1 Corrected the conflict contract: `enable --confirm` now exits nonzero for upstream-only and dual-plugin configurations, preserves exact bytes, and creates no backup.
+- [x] 14.2 Added the explicit `--replace-upstream` migration flag, restricted backup creation to that path, and documented the guided workflow.
+- [x] 14.3 Shared upstream/ACM plugin classification between conflict detection and mutation without changing checksum, ambiguity, restoration, or rollback guards.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 14.1 | `opencode_lifecycle_test.go` | Filesystem transaction | Existing lifecycle suite passed: exit 0, package `0.042s` | Exit 1: dual-plugin migration returned success and changed bytes | Implemented by 14.2; focused suite passed | Upstream-only and dual-plugin states both require explicit replacement and create no backup before confirmation | Exact-byte and absent-manifest/backup assertions remain at the command boundary |
+| 14.2 | Same + real compiled binary | CLI process | 14.1 RED captured before production edits | Two focused tests failed for implicit replacement | `go test -run TestOpenCodeMigration .` passed: exit 0, package `9.612s` | Real binary exits 2 on conflict and 0 with `--replace-upstream`; JSON and JSONC migration paths remain covered | README describes separate fresh-enable and guided-replacement paths |
+| 14.3 | Same | Approval/refactor | Focused GREEN passed before helper extraction | N/A: behavior-preserving refactor used the 14.1 approval cases; no artificial RED | Focused and regression suites remained green | Existing ambiguity, post-write restoration, corrupt-checksum, missing-backup, and successful rollback cases all pass | `classifyOpenCodePlugin` is shared by detection and mutation; diff review found no out-of-scope behavior change |
+
+### R9 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -run TestOpenCodeMigration .` → exit 0; 4/4 top-level lifecycle tests passed; package `9.612s` |
+| RED evidence | Same focused command before production changes → exit 1; dual-plugin case failed with `plugin conflict changed config or returned success`; upstream-only case failed with `migration accepted without explicit replacement` |
+| Runtime harness | `TestOpenCodeMigrationRealBinaryRequiresExplicitReplacement` builds the real `acm` in a temporary root; conflict returns exact exit 2 with byte-identical config and no backup, while `--replace-upstream` returns 0, removes upstream, enables ACM, and creates both backup files |
+| Regression commands | `go test ./...` → exit 0, package `12.685s`; `node --test "integrations/opencode/test/*.test.js"` → exit 0, 27/27 passed, `13714.717266ms` |
+| Host isolation | Every lifecycle run used `t.TempDir()` plus temporary `HOME`, `ACM_DIR`, `ACM_OPENCODE_CONFIG_HOME`, `ACM_OPENCODE_PLUGIN_PATH`, `TMPDIR`, and `GOCACHE`; no command addressed real OpenCode configuration, ACM state, profiles, or credentials |
+| Static and refactor checks | `gofmt -l`, `go vet ./...`, and `git diff --check` → exit 0 with no output; manual diff review confirmed only lifecycle migration, its tests, README guidance, and SDD metadata changed |
+| Rollback boundary | Revert R9 changes in `opencode_lifecycle.go`, `opencode_lifecycle_test.go`, `README.md`, and Phase 14 task/progress metadata; R8 distribution and all machine, adapter, auth, and durability behavior remain unchanged |
+
+## R9 Status
+48/54 planned tasks complete. R9 closes round-4 C2; R10–R11 remain pending.

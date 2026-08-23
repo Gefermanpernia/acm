@@ -144,9 +144,9 @@ Scope rule: slice by end-user capability and rollback boundary, including every 
 - [x] 13.3 **REFACTOR**: make fixture cleanup assert no host paths, aliases, credentials, or real installer targets were touched.
 
 ## Phase 14: Guided Migration (R9; C2)
-- [ ] 14.1 **RED**: correct `opencode_lifecycle_test.go`: both plugins plus `--confirm` exits nonzero, preserves bytes, and creates no backup; `--replace-upstream` is required.
-- [ ] 14.2 **GREEN**: update `opencode_lifecycle.go` and `README.md`: only `enable --confirm --replace-upstream` may migrate and back up JSON/JSONC.
-- [ ] 14.3 **REFACTOR**: share plugin-conflict detection without weakening checksum, ambiguity, or rollback guards.
+- [x] 14.1 **RED**: correct `opencode_lifecycle_test.go`: both plugins plus `--confirm` exits nonzero, preserves bytes, and creates no backup; `--replace-upstream` is required.
+- [x] 14.2 **GREEN**: update `opencode_lifecycle.go` and `README.md`: only `enable --confirm --replace-upstream` may migrate and back up JSON/JSONC.
+- [x] 14.3 **REFACTOR**: share plugin-conflict detection without weakening checksum, ambiguity, or rollback guards.
 
 ## Phase 15: Outcome and Durability Boundary (R10; W1/W2/W3/W7/S1)
 - [ ] 15.1 **RED**: extend real-binary guards for cooling/no replacement, begin-quarantine, busy, invalid lease, unknown operation, dispatcher invalid operation, and directory-sync-after-rename.
