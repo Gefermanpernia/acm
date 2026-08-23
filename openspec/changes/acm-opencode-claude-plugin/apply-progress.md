@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R8 `Distribution integrity` (`feat/opencode-plugin-r8-distribution-integrity`)
-- Target: `feat/opencode-plugin-r7-contract-coherence` under `feature-branch-chain`
+- Current slice: R11 `Local Auth Error Containment` (`feat/opencode-plugin-r11-auth-error-containment`)
+- Parent: `feat/opencode-plugin-r10-outcome-durability` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -542,3 +542,29 @@ None.
 
 ## R10 Status
 51/54 planned tasks complete. R10 closes W1, W2, W3, W7, and S1; R11 remains pending and was not started.
+
+## R11 Local Auth Error Containment
+- [x] 16.1 Added missing-credential and healthy-control factory cases proving `auth.fetch` exposes no temporary path or credential identifier and still forwards valid credentials.
+- [x] 16.2 Normalized only local credential read and JSON parse failures to the fixed `ACM Claude credentials are unavailable` error; machine failures retain the R10 response mapping.
+- [x] 16.3 Extracted `safeCredentialError`, reran the factory harness, and diff-reviewed the refactor without finding any out-of-scope behavior change.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 16.1 | `test/quota-integration.test.js` | Factory + filesystem | Focused harness passed 1/1 before edits | Exit 1; ENOENT exposed the complete temporary credential path and `PRIVATE-CREDENTIAL-ID` | Implemented by 16.2; focused harness passed | Missing credential and valid 200 `ok-control` exercise failure and healthy paths | Cases share the real factory boundary and isolated synthetic filesystem |
+| 16.2 | `index.js` | Local auth boundary | 16.1 RED captured before production edits | Raw local read error escaped `auth.fetch` | Focused harness passed 3/3 | Existing real-machine cooling, quarantine, 503, quota, and passthrough mappings remained green | Catch scope ends before refresh and catches neither selection nor machine response mapping |
+| 16.3 | `index.js`, factory harness | Approval/refactor | Focused GREEN passed before helper extraction | N/A: behavior-preserving extraction used the passing 16.1 cases | Focused and regression suites passed | Fixed failure and healthy control both remained explicit subtests | `safeCredentialError` owns the non-informative error; diff review confirmed no out-of-scope change |
+
+### R11 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/quota-integration.test.js` → exit 0; 3/3 passed in `978.747631ms` |
+| RED evidence | Same command before production changes → exit 1; `leaked temp path: ENOENT ... /PRIVATE-CREDENTIAL-ID/.credentials.json` |
+| Runtime harness | The focused command invoked the real plugin factory and `auth.fetch` against a nonexistent credential path beneath temporary `ACM_DIR`; the valid control returned status 200/body `ok-control` with the expected synthetic bearer token |
+| Regression suite | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `1060.594336ms`; `go test ./...` → exit 0 |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | The harness used a fresh `mkdtemp` root, temporary `HOME`, `ACM_DIR`, and `ACM_OPENCODE_CONFIG_HOME`; all credential paths and binaries stayed beneath it and `t.after` recursively removed it |
+| Rollback boundary | Revert only the safe local read/parse normalization in `integrations/opencode/index.js`, the two factory cases in `test/quota-integration.test.js`, and Phase 16 metadata; R7–R10 behavior remains intact |
+
+## Round-4 Remediation Chain Status
+54/54 planned tasks complete. R7–R11 close contract coherence, distribution integrity, guided migration, machine outcome/durability, and local auth error containment. W4 non-corrupting idempotency was deliberately not planned for this chain and remains outside its remediation scope.

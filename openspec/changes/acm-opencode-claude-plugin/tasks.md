@@ -154,6 +154,6 @@ Scope rule: slice by end-user capability and rollback boundary, including every 
 - [x] 15.3 **REFACTOR**: centralize outcome mapping; model `replacement_available:false` explicitly in fixtures and retain mutation guards.
 
 ## Phase 16: Local Auth Error Containment (R11; W6)
-- [ ] 16.1 **RED**: add missing-credential and valid-control cases in `quota-integration.test.js`; assert `auth.fetch` exposes neither temp path nor credential identifier.
-- [ ] 16.2 **GREEN**: normalize local credential read/parse failures in `integrations/opencode/index.js` to a fixed safe error while retaining machine-response mapping.
-- [ ] 16.3 **REFACTOR**: isolate the safe-error helper and rerun the focused factory harness.
+- [x] 16.1 **RED**: add missing-credential and valid-control cases in `quota-integration.test.js`; assert `auth.fetch` exposes neither temp path nor credential identifier.
+- [x] 16.2 **GREEN**: normalize local credential read/parse failures in `integrations/opencode/index.js` to a fixed safe error while retaining machine-response mapping.
+- [x] 16.3 **REFACTOR**: isolate the safe-error helper and rerun the focused factory harness.

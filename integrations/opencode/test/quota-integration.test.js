@@ -29,6 +29,41 @@ test("maps real machine transitions without owning retry or continuation", async
   const credential = (expiresAt) => JSON.stringify({ claudeAiOauth: {
     accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt,
   } });
+  const factoryFetch = async (selection, send) => {
+    const plugin = await createPlugin({ platform: "linux", versionIO,
+      machine: async (operation) => operation === "credential.select" ? selection : {},
+      diagnostic: async () => {}, send })();
+    const auth = await plugin.auth.loader(async () => ({ type: "oauth" }));
+    return auth.fetch(new Request("https://example.invalid", {
+      headers: { "x-acm-operation-id": "a".repeat(64) },
+    }));
+  };
+  const privateProfile = "PRIVATE-CREDENTIAL-ID";
+  const localAuthDir = join(acmDir, "local-auth");
+  await t.test("normalizes missing local credential errors", async () => {
+    const missingCredentialDir = join(localAuthDir, privateProfile);
+    await assert.rejects(factoryFetch({ profile: privateProfile, config_dir: missingCredentialDir, generation: 1 },
+      async () => assert.fail("provider must not be called")), (error) => {
+      assert.equal(error.message.includes(missingCredentialDir), false, `leaked temp path: ${error.message}`);
+      assert.equal(error.message.includes(privateProfile), false, `leaked credential identifier: ${error.message}`);
+      assert.equal(error.message, "ACM Claude credentials are unavailable");
+      return true;
+    });
+  });
+
+  await t.test("keeps valid local credentials working", async () => {
+    const validCredentialDir = join(localAuthDir, "valid-control");
+    await mkdir(validCredentialDir, { recursive: true });
+    await writeFile(join(validCredentialDir, ".credentials.json"), credential(9999999999999), { mode: 0o600 });
+    const validControl = await factoryFetch({ profile: "valid-control", config_dir: validCredentialDir, generation: 1 },
+      async (request) => {
+        assert.equal(request.headers.get("authorization"), "Bearer synthetic-access");
+        return new Response("ok-control");
+      });
+    assert.equal(validControl.status, 200);
+    assert.equal(await validControl.text(), "ok-control");
+  });
+
   for (const profile of ["alpha", "beta"]) {
     const dir = join(acmDir, "profiles", "claude", profile);
     await mkdir(dir, { recursive: true });
