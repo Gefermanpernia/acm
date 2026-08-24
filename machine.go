@@ -39,6 +39,7 @@ type machineRequest struct {
 	AccessToken   string `json:"access_token"`
 	RefreshToken  string `json:"refresh_token"`
 	ExpiresAt     int64  `json:"expires_at"`
+	ResetAt       int64  `json:"reset_at"`
 	Reason        string `json:"reason"`
 }
 
@@ -46,6 +47,7 @@ type machineOperation struct {
 	ID        string   `json:"id"`
 	UpdatedAt int64    `json:"updated_at"`
 	Profiles  []string `json:"profiles"`
+	Exhausted []string `json:"exhausted,omitempty"`
 }
 
 type machineState struct {
@@ -53,6 +55,7 @@ type machineState struct {
 	Operations  []machineOperation `json:"operations"`
 	Leases      []machineLease     `json:"leases,omitempty"`
 	Quarantined []string           `json:"quarantined,omitempty"`
+	Cooling     map[string]int64   `json:"cooling,omitempty"`
 }
 
 type machineLease struct {
@@ -80,6 +83,8 @@ func runMachine(args []string, in io.Reader, out io.Writer) int {
 			response, exit = commitMachineRefresh(req)
 		case "oauth.refresh.abort":
 			response, exit = abortMachineRefresh(req)
+		case "quota.exhaust":
+			response, exit = exhaustMachineQuota(req)
 		default:
 			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_operation", "unsupported machine operation", false), machineExitInvalid
 		}
@@ -126,9 +131,12 @@ func decodeMachineRequest(args []string, in io.Reader) (machineRequest, map[stri
 
 func validMachineRequest(req machineRequest) bool {
 	if req.Operation == "oauth.refresh.commit" {
-		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID != "" && req.AccessToken != "" && req.RefreshToken != "" && req.ExpiresAt > 0 && req.Reason == ""
+		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID != "" && req.AccessToken != "" && req.RefreshToken != "" && req.ExpiresAt > 0 && req.ResetAt == 0 && req.Reason == ""
 	}
-	return req.AccessToken == "" && req.RefreshToken == ""
+	if req.Operation == "quota.exhaust" {
+		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID == "" && req.AccessToken == "" && req.RefreshToken == "" && req.ExpiresAt == 0 && req.Reason == ""
+	}
+	return req.AccessToken == "" && req.RefreshToken == "" && req.ResetAt == 0
 }
 
 func selectMachineProfile(req machineRequest) (response map[string]any, exit int) {
@@ -147,7 +155,7 @@ func selectMachineProfile(req machineRequest) (response map[string]any, exit int
 				break
 			}
 		}
-		name, dir, err := nextMachineProfile(tools["claude"], record.Profiles, state.Quarantined)
+		name, dir, err := nextMachineProfile(tools["claude"], record.Profiles, state.Quarantined, state.Cooling, timestamp)
 		if err != nil {
 			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
 			return nil
@@ -184,7 +192,7 @@ func machineStatus(req machineRequest) (map[string]any, int) {
 		"operation_id": req.OperationID, "generation": state.Generation}, 0
 }
 
-func nextMachineProfile(t *tool, attempted, quarantined []string) (string, string, error) {
+func nextMachineProfile(t *tool, attempted, quarantined []string, cooling map[string]int64, timestamp int64) (string, string, error) {
 	for _, name := range orderedProfiles(t, false) {
 		dir, err := canonicalMachineProfile(t, name)
 		if dir == "" && err == nil {
@@ -193,7 +201,7 @@ func nextMachineProfile(t *tool, attempted, quarantined []string) (string, strin
 		if err != nil {
 			return "", "", err
 		}
-		if !inCooldown(t, name) && !slices.Contains(attempted, name) && !slices.Contains(quarantined, name) {
+		if !inCooldown(t, name) && cooling[name] <= timestamp && !slices.Contains(attempted, name) && !slices.Contains(quarantined, name) {
 			return name, dir, nil
 		}
 	}
@@ -322,6 +330,59 @@ func abortMachineRefresh(req machineRequest) (response map[string]any, exit int)
 		return nil
 	})
 	return finishMachineState(req, response, exit, err)
+}
+
+func exhaustMachineQuota(req machineRequest) (response map[string]any, exit int) {
+	err := withMachineState(func() error {
+		state, err := loadMachineState()
+		if err != nil {
+			return err
+		}
+		timestamp := time.Now().Unix()
+		operations := pruneMachineLedger(state.Operations, timestamp)
+		index := slices.IndexFunc(operations, func(operation machineOperation) bool { return operation.ID == req.OperationID })
+		if index < 0 {
+			response, exit = machineFailure(req.Operation, req.OperationID, "unknown_operation", "logical operation is unknown", false), machineExitInvalid
+			return nil
+		}
+		record := operations[index]
+		if slices.Contains(record.Exhausted, req.Profile) {
+			response = machineQuotaResponse(req, state.Generation, state.Cooling[req.Profile])
+			return nil
+		}
+		if dir, pathErr := canonicalMachineProfile(tools["claude"], req.Profile); pathErr != nil || dir == "" || !slices.Contains(record.Profiles, req.Profile) {
+			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
+			return nil
+		}
+		if state.Generation != req.Generation {
+			response, exit = machineFailure(req.Operation, req.OperationID, "stale_generation", "quota generation is stale", true), 75
+			return nil
+		}
+		resetAt := req.ResetAt
+		if resetAt <= timestamp {
+			resetAt = timestamp + int64(defaultCooldownMin)*60
+		}
+		if state.Cooling == nil {
+			state.Cooling = make(map[string]int64)
+		}
+		state.Cooling[req.Profile] = resetAt
+		record.Exhausted = append(record.Exhausted, req.Profile)
+		record.UpdatedAt = timestamp
+		operations[index] = record
+		state.Operations = operations
+		state.Generation++
+		if err = saveMachineState(state); err != nil {
+			return err
+		}
+		response = machineQuotaResponse(req, state.Generation, resetAt)
+		return nil
+	})
+	return finishMachineState(req, response, exit, err)
+}
+
+func machineQuotaResponse(req machineRequest, generation uint64, resetAt int64) map[string]any {
+	return map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID,
+		"outcome": "cooling", "generation": generation, "reset_at": resetAt}
 }
 
 func canonicalMachineProfile(t *tool, name string) (string, error) {
