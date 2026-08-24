@@ -1,17 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { assertCompatibility, operationId, transformRequest } from "./compat.js";
+import { assertCompatibility, detectClaudeVersion, operationId, transformRequest } from "./compat.js";
 import { runMachine } from "./machine.js";
 import { refreshCredentials } from "./oauth.js";
-import { handleQuotaResponse } from "./quota.js";
-import versions from "./compatibility.json" with { type: "json" };
+import { handleQuotaResponse, mapMachineResponse } from "./quota.js";
 
 export function createPlugin(overrides = {}) {
-  const deps = { platform: process.platform, versions, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
+  const deps = { platform: process.platform, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
+  deps.diagnosticError ??= (code) => console.error(`ACM diagnostics: ${code}`);
+  deps.diagnostic ??= async ({ component, event, outcome, retryable }) => {
+    try {
+      await deps.machine("diagnostics.record", { operation_id: operationId("diagnostics", randomUUID()), component, event, outcome, retryable });
+    } catch {
+      deps.diagnosticError("record_failed");
+    }
+  };
   return async function AcmOpenCodePlugin() {
+    assertCompatibility(deps.platform, true);
+    const version = await detectClaudeVersion(deps.versionIO);
+    await Promise.resolve(deps.diagnostic({ component: "adapter", event: "compatibility", outcome: version ? "recovered" : "unavailable", retryable: false, version })).catch(() => deps.diagnosticError("record_failed"));
     async function credentials(selection, id) {
-      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir), deps.versions);
+      assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir));
       const document = JSON.parse(await deps.read(join(selection.config_dir, ".credentials.json"), "utf8"));
       const source = document?.claudeAiOauth;
       if (typeof source?.accessToken !== "string" || typeof source?.refreshToken !== "string" || typeof source?.expiresAt !== "number") {
@@ -22,7 +32,9 @@ export function createPlugin(overrides = {}) {
     }
     async function load(id) {
       const selection = await deps.machine("credential.select", { operation_id: id });
-      return [selection, await credentials(selection, id)];
+      const loaded = await credentials(selection, id);
+      const { generation = selection.generation, ...auth } = loaded;
+      return [{ ...selection, generation }, auth];
     }
     return {
       "chat.headers": async (input, output) => {
@@ -36,7 +48,13 @@ export function createPlugin(overrides = {}) {
             const request = new Request(input, init);
             const id = request.headers.get("x-acm-operation-id");
             if (!id) throw new Error("OpenCode operation identity is missing");
-            const [selection, auth] = await load(id);
+            let selection, auth;
+            try {
+              [selection, auth] = await load(id);
+            } catch (error) {
+              if (error?.machine) return mapMachineResponse(error, deps.now);
+              throw error;
+            }
             const headers = new Headers(request.headers);
             headers.delete("x-acm-operation-id");
             headers.delete("x-api-key");

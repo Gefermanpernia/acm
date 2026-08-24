@@ -1,14 +1,32 @@
 import { createHash } from "node:crypto";
-import matrix from "./compatibility.json" with { type: "json" };
+import { execFile } from "node:child_process";
 
 const identity = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+const maxEvidence = 16 << 10;
 
-export function assertCompatibility(platform, managed, versions) {
+function runVersionCommand(command, args, execute) {
+  return new Promise((resolve) => {
+    try {
+      execute(command, args, { encoding: "utf8", maxBuffer: maxEvidence, timeout: 5000, windowsHide: true },
+        (error, stdout = "", stderr = "") => resolve(!error && !stderr && Buffer.byteLength(stdout) <= maxEvidence ? stdout.trim() : ""));
+    } catch { resolve(""); }
+  });
+}
+
+function parseVersion(output) {
+  if (!output || output.includes("\n")) return null;
+  const matches = output.match(/\b\d+\.\d+\.\d+\b/g);
+  return matches?.length === 1 ? matches[0] : null;
+}
+
+export async function detectClaudeVersion(boundary = {}) {
+  const execute = boundary.execFile ?? execFile;
+  return parseVersion(await runVersionCommand("claude", ["--version"], execute));
+}
+
+export function assertCompatibility(platform, managed) {
   if (platform !== "linux") throw new Error("unsupported platform");
   if (!managed) throw new Error("profile is not ACM-managed");
-  if (Object.keys(matrix).some((key) => versions?.[key] !== matrix[key])) {
-    throw new Error("unsupported OpenCode compatibility matrix");
-  }
 }
 
 export function operationId(session, message) {

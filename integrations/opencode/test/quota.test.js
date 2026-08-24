@@ -18,24 +18,45 @@ function responseFor(value) {
 
 test("transitions only confirmed Anthropic quota rejection", async () => {
   const calls = [];
+  const diagnostics = [];
   const result = await handleQuotaResponse(responseFor(fixture.confirmed), {
     operationID,
     selection: fixture.selection,
   }, {
     machine: async (operation, fields) => {
       calls.push([operation, fields]);
-      return { outcome: "replacement" };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000000 };
     },
+    now: () => 1999999955000,
+    diagnostic: async (event) => diagnostics.push(event),
   });
 
   assert.equal(result.status, 429);
-  assert.equal(result.headers.get("retry-after"), null);
+  assert.equal(result.headers.get("retry-after"), "45");
   assert.deepEqual(calls, [["quota.exhaust", {
     operation_id: operationID,
     profile: "alpha",
     generation: 7,
     reset_at: 2000000000,
   }]]);
+  assert.deepEqual(diagnostics, [{ time: 1999999955000, component: "quota", event: "transition", outcome: "cooling", retryable: true }]);
+});
+
+test("keeps quota recovery working while making missing and failed diagnostics observable", async () => {
+  const errors = [];
+  const result = await handleQuotaResponse(responseFor(fixture.confirmed), {
+    operationID, selection: fixture.selection,
+  }, {
+    machine: async () => ({ outcome: "cooling", generation: 8, reset_at: 2000000000 }),
+    now: () => 1999999955000,
+    diagnosticError: (code) => errors.push(code),
+  });
+  assert.equal(result.status, 429);
+  const failed = await handleQuotaResponse(responseFor(fixture.confirmed), { operationID, selection: fixture.selection }, {
+    machine: async () => ({ outcome: "cooling", reset_at: 2000000000 }), diagnostic: async () => { throw new Error("private"); }, diagnosticError: (code) => errors.push(code), now: () => 1999999955000,
+  });
+  assert.equal(failed.status, 429);
+  assert.deepEqual(errors, ["missing_diagnostic_sink", "record_failed"]);
 });
 
 test("preserves generic 401, 429, and 529 responses unchanged", async () => {
@@ -76,8 +97,9 @@ test("leaves fallback cooldown selection to ACM for an invalid reset", async () 
   }, {
     machine: async (_operation, fields) => {
       request = fields;
-      return { outcome: "replacement" };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000090 };
     },
+    diagnostic: async () => {},
   });
 
   assert.equal("reset_at" in request, false);
@@ -97,28 +119,6 @@ test("quarantines an unrecoverable refresh through the ACM lease", async () => {
 
   assert.deepEqual(calls.map(([operation]) => operation), ["oauth.refresh.begin", "oauth.refresh.abort"]);
   assert.equal(calls[1][1].reason, "unrecoverable");
-});
-
-test("reports cooling and quarantine as distinct retry outcomes", async () => {
-  const cooling = await handleQuotaResponse(responseFor(fixture.confirmed), {
-    operationID,
-    selection: fixture.selection,
-  }, { machine: async () => ({ outcome: "cooling", retry_after: 90 }) });
-  const quarantine = await handleQuotaResponse(responseFor(fixture.confirmed), {
-    operationID,
-    selection: fixture.selection,
-  }, { machine: async () => ({ outcome: "quarantined" }) });
-
-  assert.equal(cooling.status, 429);
-  assert.equal(cooling.headers.get("retry-after"), "90");
-  assert.deepEqual(await cooling.json(), { outcome: "cooling", retryable: true });
-  assert.equal(quarantine.status, 401);
-  assert.equal(quarantine.headers.get("retry-after"), null);
-  assert.deepEqual(await quarantine.json(), {
-    action: "acm login",
-    outcome: "quarantined",
-    retryable: false,
-  });
 });
 
 test("bounds diagnostics and excludes private inputs", () => {

@@ -2,6 +2,10 @@ import { redactDiagnostic } from "./diagnostics.js";
 
 const maxEvidenceBytes = 4 << 10;
 
+function reportDiagnosticFailure(dependencies, code) {
+  try { (dependencies.diagnosticError ?? console.error)(code); } catch {}
+}
+
 async function readEvidence(response) {
   const reader = response.clone().body?.getReader();
   if (!reader) return null;
@@ -34,30 +38,40 @@ function validReset(headers, now) {
     : undefined;
 }
 
-function retryResponse(transition) {
-  if (transition.outcome === "quarantined") {
-    return Response.json({
-      action: "acm login",
-      outcome: "quarantined",
-      retryable: false,
-    }, { status: 401 });
-  }
+function retryAfter(resetAt, now) {
+  const current = Math.floor(now() / 1000);
+  return Number.isInteger(resetAt) && resetAt > current ? resetAt - current : undefined;
+}
+
+export function mapMachineResponse(value, now = Date.now) {
+  if (value instanceof Response) return value;
+  const detail = value?.error ?? value;
+  const code = /^[a-z][a-z0-9_]{0,63}$/.test(detail?.code ?? "") ? detail.code : "machine_failed";
+  const quarantined = code === "credential_quarantined";
+  const cooling = value?.outcome === "cooling" || code === "no_available_profile" && detail?.retryable === true;
   const headers = new Headers();
-  if (transition.outcome === "cooling" && Number.isInteger(transition.retry_after)) {
-    headers.set("retry-after", String(Math.max(0, transition.retry_after)));
+  const delay = retryAfter(value?.reset_at, now);
+  if (cooling && value?.replacement_available !== true && delay !== undefined) {
+    headers.set("retry-after", String(delay));
   }
-  return Response.json({
-    outcome: transition.outcome,
-    retryable: true,
-  }, { status: 429, headers });
+  const body = quarantined ? {
+    action: "acm login",
+    outcome: "quarantined",
+    retryable: false,
+  } : {
+    ...(cooling ? {} : { code }),
+    outcome: cooling ? "cooling" : "unavailable",
+    retryable: cooling || detail?.retryable === true,
+  };
+  return Response.json(body, { status: quarantined ? 401 : cooling ? 429 : 503, headers });
 }
 
 export async function handleQuotaResponse(response, context, dependencies) {
-  if (response.status !== 429) return response;
+  if (response.status !== 429) return mapMachineResponse(response);
   const evidence = await readEvidence(response);
   if (evidence?.error?.type !== "rate_limit_error" ||
       response.headers.get("anthropic-ratelimit-unified-status") !== "rejected") {
-    return response;
+    return mapMachineResponse(response);
   }
   const request = {
     operation_id: context.operationID,
@@ -70,15 +84,21 @@ export async function handleQuotaResponse(response, context, dependencies) {
   try {
     transition = await dependencies.machine("quota.exhaust", request);
   } catch (error) {
-    if (error?.code === "stale_generation") return response;
-    throw error;
+    if (error?.code === "stale_generation") return mapMachineResponse(response);
+    return mapMachineResponse(error, dependencies.now ?? Date.now);
   }
-  dependencies.diagnostic?.(redactDiagnostic({
+  const diagnostic = redactDiagnostic({
     time: (dependencies.now ?? Date.now)(),
     component: "quota",
     event: "transition",
     outcome: transition.outcome,
     retryable: transition.outcome !== "quarantined",
-  }));
-  return retryResponse(transition);
+  });
+  if (typeof dependencies.diagnostic !== "function") {
+    reportDiagnosticFailure(dependencies, "missing_diagnostic_sink");
+  } else {
+    try { await dependencies.diagnostic(diagnostic); }
+    catch { reportDiagnosticFailure(dependencies, "record_failed"); }
+  }
+  return mapMachineResponse(transition, dependencies.now ?? Date.now);
 }

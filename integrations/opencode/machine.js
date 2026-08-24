@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 const operations = new Set([
   "credential.select",
   "diagnostics.status",
+  "diagnostics.record",
   "oauth.refresh.begin",
   "oauth.refresh.commit",
   "oauth.refresh.abort",
@@ -10,8 +11,8 @@ const operations = new Set([
 ]);
 const maxOutput = 16 << 10;
 
-function failure(code) {
-  return Object.assign(new Error(`ACM machine interface failed (${code})`), { code });
+function failure(code, metadata = {}) {
+  return Object.assign(new Error(`ACM machine interface failed (${code})`), { code, machine: true, ...metadata });
 }
 
 export function runMachine(operation, fields, options = {}) {
@@ -33,7 +34,16 @@ export function runMachine(operation, fields, options = {}) {
           response.operation_id !== request.operation_id || typeof response.ok !== "boolean") {
         return reject(failure("invalid_machine_response"));
       }
-      if (error || !response.ok) return reject(failure(response.error?.code ?? "machine_failed"));
+      if (error && response.ok) return reject(failure("machine_failed"));
+      if (!response.ok) {
+        const detail = response.error;
+        if (typeof detail?.code !== "string" || typeof detail.message !== "string" ||
+            typeof detail.retryable !== "boolean" ||
+            (response.reset_at !== undefined && !Number.isInteger(response.reset_at))) {
+          return reject(failure("invalid_machine_response"));
+        }
+        return reject(failure(detail.code, { retryable: detail.retryable, reset_at: response.reset_at }));
+      }
       resolve(response);
     });
     child.stdin.end(JSON.stringify(request));

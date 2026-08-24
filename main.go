@@ -63,6 +63,7 @@ type tool struct {
 
 var toolOrder = []string{"claude", "codex"}
 var tools map[string]*tool
+var loginInteractive = runInteractive
 
 func initGlobals() {
 	var err error
@@ -578,10 +579,27 @@ func cmdDoctor() int {
 		fmt.Printf("%-7s %s\n", t.name+":", v)
 	}
 	fmt.Printf("acm    : v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
-	fmt.Println("estado : " + acmDir)
 	fmt.Printf("cooldown por defecto: %dm\n", defaultCooldownMin)
-	fmt.Println()
-	return cmdLs()
+	state, err := loadMachineState()
+	if err != nil {
+		fmt.Println("opencode diagnostics: unavailable")
+		return 0
+	}
+	diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
+	fmt.Printf("opencode diagnostics: %d; active leases: %d\n", len(diagnostics), active)
+	counts := make(map[string]int)
+	for _, event := range diagnostics {
+		counts[event.Component+"."+event.Event+"."+event.Outcome]++
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Printf("  %s: %d\n", key, counts[key])
+	}
+	return 0
 }
 
 func seedProfile(t *tool, dst string) {
@@ -628,21 +646,35 @@ func cmdLogin(args []string) int {
 	if !profileExists(t, name) {
 		die("no existe el perfil '" + name + "' (créalo: acm add " + t.name + " " + name + ")")
 	}
-	var rc int
+	defer os.Remove(coolFile(t, name))
+	var rc, recoveryExit int
+	var generation uint64
+	var quarantined bool
+	var credentialBefore []byte
 	switch t.name {
 	case "claude":
+		generation, quarantined, recoveryExit = machineLoginState(name)
+		if recoveryExit != 0 {
+			return recoveryExit
+		}
+		credentialBefore, _ = os.ReadFile(filepath.Join(resolvedDir(t, name), t.credFile))
 		fmt.Printf("→ Abriendo Claude Code con el perfil '%s'.\n", name)
 		fmt.Println("  Si ya hay sesión de otra cuenta, usa /login dentro; termina con /exit.")
-		rc = runInteractive(t, name, nil)
+		rc = loginInteractive(t, name, nil)
+		if rc == 0 && quarantined {
+			credentialAfter, err := os.ReadFile(filepath.Join(resolvedDir(t, name), t.credFile))
+			if err != nil || bytes.Equal(credentialBefore, credentialAfter) {
+				return machineExitUnavailable
+			}
+			rc = recoverMachineProfile(name, generation)
+		}
 	case "codex":
 		// device-auth: el flujo de navegador (localhost:1455) suele fallar en WSL
-		rc = runInteractive(t, name, []string{"login", "--device-auth"})
+		rc = loginInteractive(t, name, []string{"login", "--device-auth"})
 		if rc != 0 {
-			rc = runInteractive(t, name, []string{"login"})
+			rc = loginInteractive(t, name, []string{"login"})
 		}
 	}
-	// tras el login, la cuenta vuelve a estar operativa
-	_ = os.Remove(coolFile(t, name))
 	return rc
 }
 
