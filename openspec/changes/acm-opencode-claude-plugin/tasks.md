@@ -184,9 +184,9 @@ Chain strategy: feature-branch-chain
 Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base = R13 branch; R15 base = R14 branch; R16 base = R15 branch. Retarget/rebase any polluted child diff.
 
 ## Phase 17: Restorable Plain Opt-In (R12; C1(R5))
-- [ ] 17.1 **RED**: in `opencode_lifecycle_test.go`, add no-upstream plain-enable tests that fail without manifest/backup, then prove real compiled `acm` enable→rollback restores original bytes under temp HOME, ACM_DIR, config, bin, and plugin paths.
-- [ ] 17.2 **GREEN**: make `opencode_lifecycle.go` create the checksummed backup and manifest before every config-mutating enable; update `README.md` so plain opt-in documents rollback availability.
-- [ ] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
+- [x] 17.1 **RED**: in `opencode_lifecycle_test.go`, add no-upstream plain-enable tests that fail without manifest/backup, then prove real compiled `acm` enable→rollback restores original bytes under temp HOME, ACM_DIR, config, bin, and plugin paths.
+- [x] 17.2 **GREEN**: make `opencode_lifecycle.go` create the checksummed backup and manifest before every config-mutating enable; update `README.md` so plain opt-in documents rollback availability.
+- [x] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
 
 ## Phase 18: Custom-Share Installation Capability (R13; W1)
 - [ ] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.

@@ -568,3 +568,33 @@ None.
 
 ## Round-4 Remediation Chain Status
 54/54 planned tasks complete. R7–R11 close contract coherence, distribution integrity, guided migration, machine outcome/durability, and local auth error containment. W4 non-corrupting idempotency was deliberately not planned for this chain and remains outside its remediation scope.
+
+## R12 Restorable Plain Opt-In
+- [x] 17.1 Added no-upstream JSONC and real compiled-binary JSON paths that require an exact checksummed backup, preserve the existing-backup guard, and restore byte-identical configuration on rollback.
+- [x] 17.2 Restored one unconditional backup transaction before every successful enable write and documented rollback availability for plain opt-in and explicit upstream replacement.
+- [x] 17.3 Kept conflict, checksum, ambiguity, post-write restoration, cleanup, and exit behavior unchanged; reran the focused, lifecycle, real-binary, Go, Node, formatting, vet, and diff checks.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 17.1 | `opencode_lifecycle_test.go` | Filesystem transaction + compiled binary | Existing lifecycle suite passed 4/4 before edits (`go test -count=1 -run '^TestOpenCodeMigration' .`) | Required focused command exited 1 because plain enable created neither `opencode.jsonc.acm-backup` nor the manifest | Implemented by 17.2; required focused command passed | In-process JSONC and real-binary JSON paths both verify exact backup bytes, manifest checksum, rollback byte equality, and cleanup | Shared lifecycle setup now isolates HOME, ACM_DIR, config, bin, share, and plugin paths under `t.TempDir()` |
+| 17.2 | `opencode_lifecycle.go`, `README.md` | Config transaction + user guidance | 17.1 RED captured before production edits | Plain enable wrote the config while leaving no rollback artifacts | Required focused command passed in `17.538s`; README now documents both restorable routes | Existing replacement tests and the new plain-enable tests exercise both branches through the same transaction | Backup and manifest writes execute once after the existing-backup guard and before the config write |
+| 17.3 | Lifecycle suite | Approval/refactor | Focused GREEN passed before isolation and guard strengthening | N/A: behavior-preserving refactor used the passing 17.1 suite; no artificial RED | All focused and regression commands passed | Second enable must return exit 2 with `ya existe un respaldo` while preserving config, backup, and manifest bytes; conflict and invalid-backup paths remain distinct | Diff review confirms only backup reachability, isolated lifecycle tests, rollback documentation, and SDD metadata changed |
+
+### R12 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -count=1 -run '^TestOpenCodeMigration(PlainEnableCreatesRestorableBackup|RollbackAndMissingBackup)$' .` → exit 0; package `17.538s` |
+| RED evidence | Same command before production changes → exit 1; `plain enable backup = "", err = ... opencode.jsonc.acm-backup: no such file or directory` |
+| Runtime harness | `go test -count=1 -v -run '^TestOpenCodeMigrationPlainEnableCreatesRestorableBackup$' .` built the real `acm`, ran plain `enable --confirm`, verified backup + manifest, ran `rollback --confirm`, and restored exactly 54 bytes with SHA-256 `1699ac0e251ff28ea53a07ad47734c28369f8512cc2d31a49571f53f1d08abcc`; exit 0 |
+| Lifecycle regression | `go test -count=1 -v -run '^TestOpenCodeMigration' .` → exit 0; 5/5 top-level tests passed in `26.412s`, including ambiguity/post-write cleanup, conflict/checksum, real replacement, plain enable, and missing backup |
+| Full Go suite | `go test -count=1 ./...` → exit 0; package `30.783s` |
+| Full Node suite | Final isolated run of `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `1712.169022ms` after priming the same temporary Go build cache |
+| Node flake disclosure | Two preceding cold-cache isolated runs hit the known 200 ms `machine-process.test.js` subprocess timeout (28/29, then 27/29); no Node source changed, and the final exact command passed with an isolated warmed cache |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | Every runtime command used `env -i` plus a fresh `/tmp/opencode/acm-r12-*` root. Tests additionally used `t.TempDir()` for HOME, ACM_DIR, config, bin, share, plugin, TMPDIR, GOCACHE, binary, backup, and manifest paths. No real OpenCode config, ACM state, profile, credential, binary, or plugin path was addressed; each shell sandbox was trap-removed. |
+| Review budget | Production/test/docs delta: 84 additions + 11 deletions = **95/190 changed lines** |
+| Rollback boundary | Revert only the unconditional backup transaction in `opencode_lifecycle.go`, R12 additions/isolation in `opencode_lifecycle_test.go`, the plain-opt-in rollback sentence in `README.md`, and Phase 17 metadata. R7–R11 behavior remains intact. |
+
+## Round-5 Remediation Chain Status
+57/69 planned tasks complete. R12 closes C1(R5) and is ready for independent SDD verification; R13–R16 remain pending and were not started.

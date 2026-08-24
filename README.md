@@ -77,7 +77,7 @@ El comando valida `opencode.json` o `opencode.jsonc`. Si detecta `opencode-anthr
 acm opencode enable --confirm --replace-upstream
 ```
 
-Solo esta ruta reemplaza el plugin upstream y crea un respaldo con checksum. Después reinicie OpenCode. Para volver a la configuración respaldada, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
+Solo esta ruta reemplaza el plugin upstream. Tanto la activación directa como la migración explícita crean un respaldo con checksum antes de modificar la configuración. Después reinicie OpenCode. Para deshacer cualquiera de las dos rutas, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
 
 ## Cómo funciona
 

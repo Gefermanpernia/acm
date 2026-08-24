@@ -92,14 +92,12 @@ func enableOpenCode(home string, replaceUpstream bool) error {
 	if _, err = os.Lstat(manifest); !os.IsNotExist(err) {
 		return fmt.Errorf("ya existe un respaldo; revierte antes de habilitar")
 	}
-	if replaceUpstream {
-		rollback, _ := editOpenCode(original, pluginURL, false)
-		record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
-		if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
-			os.Remove(backup)
-			os.Remove(manifest)
-			return fmt.Errorf("no se pudo crear el respaldo")
-		}
+	rollback, _ := editOpenCode(original, pluginURL, false)
+	record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
+	if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
+		os.Remove(backup)
+		os.Remove(manifest)
+		return fmt.Errorf("no se pudo crear el respaldo")
 	}
 	if err = atomicWriteMachineFile(path, updated); err == nil {
 		current, readErr := readOpenCode(path)
