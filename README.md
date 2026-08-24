@@ -60,7 +60,7 @@ Flujo típico cuando la TUI anuncia "límite alcanzado": sales, `acm limit claud
 
 ## OpenCode transparent failover
 
-El instalador incluye, pero deja **deshabilitado**, el adaptador experimental ES modules de `integrations/opencode/`. Solo admite Linux, perfiles ACM y la matriz fijada OpenCode 1.18.19 / SDK 1.17.12 / Claude CLI 2.1.236.
+El instalador incluye, pero deja **deshabilitado**, el adaptador experimental ES modules de `integrations/opencode/`. Solo admite Linux y perfiles ACM con credenciales válidas. La compatibilidad de la API la rige el rango declarado `@opencode-ai/plugin: ^1.18.18`; la detección de Claude CLI es solo diagnóstica y su ausencia o una versión no exacta no impiden cargar el adaptador.
 La frontera estable es `acm machine v1 <operation>` por stdin/stdout, con entrada máxima de 64 KiB y salida máxima de 16 KiB. Implementa `credential.select`, `diagnostics.status`, `oauth.refresh.begin|commit|abort` y `quota.exhaust`. ACM selecciona el perfil y devuelve su directorio de configuración; el adaptador lee allí `.credentials.json`, mantiene el token solo en memoria, nunca escribe `auth.json` de OpenCode y nunca registra credenciales.
 La rotación es deliberadamente conservadora:
 - Requiere simultáneamente HTTP 429, el error tipado `rate_limit_error` y `anthropic-ratelimit-unified-status: rejected`. Un 429 genérico o cualquier 529 pasa sin cambios.

@@ -194,9 +194,9 @@ Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base
 - [x] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
 
 ## Phase 19: Compatibility Documentation Coherence (R14; W2)
-- [ ] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.
-- [ ] 19.2 **GREEN**: replace the matrix claim in `README.md` with ADR 0001's package-range and diagnostic-only CLI policy.
-- [ ] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
+- [x] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.
+- [x] 19.2 **GREEN**: replace the matrix claim in `README.md` with ADR 0001's package-range and diagnostic-only CLI policy.
+- [x] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
 
 ## Phase 20: Doctor Legacy Visibility (R15; W3)
 - [ ] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.

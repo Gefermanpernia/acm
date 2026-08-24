@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R13 `Custom-Share Installation Capability` (`feat/opencode-plugin-r13-custom-share-install`)
-- Parent: `feat/opencode-plugin-r12-restorable-plain-enable` at `c47970a` under `feature-branch-chain`
+- Current slice: R14 `Compatibility Documentation Coherence` (`feat/opencode-plugin-r14-compat-doc-coherence`)
+- Parent: `feat/opencode-plugin-r13-custom-share-install` at `8f9c0ed` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -597,7 +597,7 @@ None.
 | Rollback boundary | Revert only the unconditional backup transaction in `opencode_lifecycle.go`, R12 additions/isolation in `opencode_lifecycle_test.go`, the plain-opt-in rollback sentence in `README.md`, and Phase 17 metadata. R7–R11 behavior remains intact. |
 
 ## Round-5 Remediation Chain Status
-60/69 planned tasks complete. R12 closes C1(R5), and R13 closes W1 by keeping installer and lifecycle custom-share discovery coherent. R14–R16 remain pending and were not started.
+63/69 planned tasks complete. R12 closes C1(R5), R13 closes W1, and R14 closes W2 with a cross-document compatibility guard. R15–R16 remain pending and were not started.
 
 ## R13 Custom-Share Installation Capability
 - [x] 18.1 Replaced the installer fixture binary with a real isolated build and captured the expected RED: install succeeded under a custom `ACM_SHARE_DIR`, then lifecycle enable exited 2 because it searched the default share.
@@ -625,3 +625,23 @@ None.
 | Review budget | Product/test/docs/spec delta before OpenSpec delivery metadata: 105 additions + 23 deletions = **128/300 changed lines**; complete slice including OpenSpec delivery metadata is 138 additions + 29 deletions = **167 changed lines** |
 | Diff/refactor review | The complete 18.3 diff preserves the installer seven-asset list and atomic staging, R9 explicit replacement/conflict behavior, R12 unconditional backup + exact rollback, exit taxonomy, and all adapter/machine behavior; no out-of-scope behavior changed |
 | Rollback boundary | Revert only custom-share resolution in `opencode_lifecycle.go`, the R13 `install.test.js` harness additions, lifecycle-spec override scenarios, README override guidance, and Phase 18 metadata. R8 distribution, R9 migration, R12 backup reachability, and all machine/adapter behavior remain intact. |
+
+## R14 Compatibility Documentation Coherence
+- [x] 19.1 Added a README matrix-absence RED while retaining successful missing and non-exact Claude CLI factory loads.
+- [x] 19.2 Replaced the stale matrix with ADR 0001's package-range and diagnostic-only CLI policy in Spanish user guidance.
+- [x] 19.3 Centralized package, README, ADR, and auth R3 assertions and diff-read the refactor without finding out-of-scope behavior changes.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 19.1 | `contract-coherence.test.js` | Contract + factory | Existing 2/2 passed | Focused exit 1; README matched the removed exact matrix | Implemented by 19.2; 2/2 passed | Non-exact `9.9.9` and missing CLI evidence both still load | Matrix absence now belongs to the shared policy guard |
+| 19.2 | `README.md` | User guidance | 19.1 RED captured | README contradicted ADR 0001 and auth R3 | Focused 2/2 passed after the minimal prose replacement | Package range and diagnostic-only CLI behavior are both explicit | No policy or runtime code changed |
+| 19.3 | `contract-coherence.test.js` | Approval/refactor | Focused GREEN passed 2/2 | N/A: behavior-preserving assertion refactor | Final focused 2/2 and full Node 29/29 passed | README, ADR, spec, package, missing CLI, and non-exact CLI boundaries remain distinct | Diff review confirmed only R14 documentation coherence and its guard changed |
+
+### R14 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test and RED | `node --test integrations/opencode/test/contract-coherence.test.js`: baseline 2/2; RED 1/2 with `README.md` matching the removed matrix; final 2/2 in `187.956228ms` |
+| Runtime harness | The focused offline factory loaded hooks `auth,chat.headers` with CLI `9.9.9` and loaded Anthropic auth with missing CLI evidence; controlled process evidence only, no machine, credential, config, or network access |
+| Regression and isolation | Isolated `go test -count=1 ./...` passed in `42.640s`; after one known 200 ms cold/concurrent subprocess-timeout flake (28/29), a warmed full Node rerun passed 29/29 in `22.128692081s`; formatting, vet, and diff checks were clean; all HOME/ACM/config/share/cache paths were temporary and removed |
+| Review and rollback | Product/test/docs: 26 additions + 10 deletions = **36/70**; complete slice with OpenSpec metadata: 52 additions + 16 deletions = **68/70 changed lines**. Revert only the README policy sentence, centralized coherence assertions, and Phase 19 metadata; R12, R13, exit taxonomy, runtime behavior, and later slices remain untouched. |
