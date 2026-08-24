@@ -7,10 +7,13 @@ import { runMachine } from "../machine.js";
 
 const stub = fileURLToPath(new URL("./fixtures/machine-stub.js", import.meta.url));
 const id = "a".repeat(64);
+// Only the dedicated timeout mode may race the clock. Every other mode spawns a
+// Node interpreter whose startup can exceed 200ms under load, so those runs use
+// a generous timeout to keep their failure classification independent of time.
 const invoke = (mode = "ok") => runMachine("diagnostics.status", { operation_id: id }, {
   binary: process.execPath,
   prefixArgs: [stub],
-  timeout: 200,
+  timeout: mode === "timeout" ? 200 : 5000,
   env: { ...process.env, ACM_STUB_MODE: mode },
 });
 
