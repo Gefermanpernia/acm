@@ -189,9 +189,9 @@ Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base
 - [x] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
 
 ## Phase 18: Custom-Share Installation Capability (R13; W1)
-- [ ] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.
-- [ ] 18.2 **GREEN**: amend `specs/acm-opencode-plugin-lifecycle/spec.md` for the shared override; make `opencode_lifecycle.go` resolve `ACM_SHARE_DIR` before its default plugin path and document it in `README.md`.
-- [ ] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
+- [x] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.
+- [x] 18.2 **GREEN**: amend `specs/acm-opencode-plugin-lifecycle/spec.md` for the shared override; make `opencode_lifecycle.go` resolve `ACM_SHARE_DIR` before its default plugin path and document it in `README.md`.
+- [x] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
 
 ## Phase 19: Compatibility Documentation Coherence (R14; W2)
 - [ ] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.

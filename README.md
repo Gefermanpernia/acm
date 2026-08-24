@@ -23,7 +23,7 @@ Un solo comando, desde **cualquier shell** (bash, zsh, fish, ...) en Linux/WSL y
 curl -fsSL https://raw.githubusercontent.com/Gefermanpernia/acm/main/install.sh | sh
 ```
 
-El instalador descarga el binario correcto para tu sistema, lo deja en `~/.local/bin/acm`, añade los aliases (`cl`, `cx`, `clp`, `cxp`) a bash, zsh **y** fish (solo en los que existan, sin duplicar) y adopta tus logins actuales como perfil `principal`. Variables opcionales: `ACM_VERSION=v2.0.0`, `ACM_BIN_DIR=~/bin`.
+El instalador descarga el binario correcto para tu sistema, lo deja en `~/.local/bin/acm`, añade los aliases (`cl`, `cx`, `clp`, `cxp`) a bash, zsh **y** fish (solo en los que existan, sin duplicar) y adopta tus logins actuales como perfil `principal`. Variables opcionales: `ACM_VERSION=v2.0.0`, `ACM_BIN_DIR=~/bin`, `ACM_SHARE_DIR=~/ruta/compartida/acm`.
 
 Alternativas:
 
@@ -66,6 +66,8 @@ La rotación es deliberadamente conservadora:
 - Requiere simultáneamente HTTP 429, el error tipado `rate_limit_error` y `anthropic-ratelimit-unified-status: rejected`. Un 429 genérico o cualquier 529 pasa sin cambios.
 - Enfriamiento y cuarentena son resultados distintos. ACM aplica su propia política de cooldown cuando no existe un reset válido; una cuarentena exige `acm login`.
 - Reintentos, backoff, esperas y continuidad de sesión pertenecen a OpenCode. El adaptador hace una sola llamada al proveedor por intento.
+El instalador y el comando de activación respetan `ACM_SHARE_DIR`: cuando está definida, ambos usan `ACM_SHARE_DIR/opencode/index.js`; cuando no lo está, usan `~/.local/share/acm/opencode/index.js`. Si define una ruta personalizada y allí no existe un adaptador válido, la activación se detiene sin buscar en la ruta predeterminada ni modificar la configuración.
+
 Para habilitarla, cierre OpenCode y ejecute:
 
 ```sh

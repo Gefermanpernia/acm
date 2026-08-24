@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R11 `Local Auth Error Containment` (`feat/opencode-plugin-r11-auth-error-containment`)
-- Parent: `feat/opencode-plugin-r10-outcome-durability` under `feature-branch-chain`
+- Current slice: R13 `Custom-Share Installation Capability` (`feat/opencode-plugin-r13-custom-share-install`)
+- Parent: `feat/opencode-plugin-r12-restorable-plain-enable` at `c47970a` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -597,4 +597,31 @@ None.
 | Rollback boundary | Revert only the unconditional backup transaction in `opencode_lifecycle.go`, R12 additions/isolation in `opencode_lifecycle_test.go`, the plain-opt-in rollback sentence in `README.md`, and Phase 17 metadata. R7–R11 behavior remains intact. |
 
 ## Round-5 Remediation Chain Status
-57/69 planned tasks complete. R12 closes C1(R5) and is ready for independent SDD verification; R13–R16 remain pending and were not started.
+60/69 planned tasks complete. R12 closes C1(R5), and R13 closes W1 by keeping installer and lifecycle custom-share discovery coherent. R14–R16 remain pending and were not started.
+
+## R13 Custom-Share Installation Capability
+- [x] 18.1 Replaced the installer fixture binary with a real isolated build and captured the expected RED: install succeeded under a custom `ACM_SHARE_DIR`, then lifecycle enable exited 2 because it searched the default share.
+- [x] 18.2 Made lifecycle discovery use `ACM_SHARE_DIR/opencode/index.js` before the default share, amended the lifecycle spec in the same slice, and documented the override and fail-closed behavior.
+- [x] 18.3 Kept install, seven-asset staging, enabled-path ESM loading, byte-exact rollback, failed-stage preservation, missing-custom-share rejection, host canaries, and sandbox deletion in one offline harness.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 18.1 | `integrations/opencode/test/install.test.js` | Offline installer + compiled-binary E2E | Existing installer harness passed 1/1 in `199.185098ms`; lifecycle suite passed | Exit 1 after `12.788s`: install staged seven assets, but real `acm opencode enable --confirm` returned exit 2 with `el adaptador OpenCode de ACM no está instalado` | Implemented by 18.2; focused harness passed 1/1 | Custom share path is asserted from the enabled config and imported as the real staged ESM entry point | Real release binary replaced the fake lifecycle command; the network boundary remains fake `curl` |
+| 18.2 | `opencode_lifecycle.go`, lifecycle spec, `README.md` | Lifecycle path resolution + contract | 18.1 RED captured before production/spec edits | Lifecycle ignored the installer-owned override | Focused harness passed with install 0, enable 0, hooks `auth,chat.headers`, rollback 0 | Set-and-present custom share succeeds; set-but-missing custom share fails without default fallback or config mutation | Explicit plugin-path override remains highest priority; `ACM_SHARE_DIR` only replaces the prior default branch |
+| 18.3 | `install.test.js` | Approval/refactor + safety | Focused GREEN passed 1/1 in `12.802s` before final isolation assertions | N/A: behavior-preserving refactor used the passing 18.1 harness; no artificial RED | Final focused harness passed 1/1 in `10.892s` | Missing custom entry point is tested while a valid default entry exists, proving fail-closed resolution; rejected `quota.js` staging preserves the seven installed assets byte-for-byte | Diff review confirmed only custom-share discovery, its same-slice contract/docs, and the isolated harness changed; no out-of-scope behavior was altered |
+
+### R13 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/install.test.js` → exit 0; 1/1 passed in `10.891848637s` |
+| RED evidence | Same command before production changes → exit 1; actual exit 2 versus expected 0; stderr was exactly scoped to `acm: el adaptador OpenCode de ACM no está instalado` |
+| Runtime harness | Offline real `sh install.sh` returned 0, staged exactly seven assets under a custom share, real compiled `acm` enable returned 0, enabled URL was `file:///tmp/acm-install-*/installed-share/opencode/index.js`, that staged module loaded hooks `auth,chat.headers`, rollback returned 0 and restored 29 exact bytes, and a missing custom share returned 2 without default fallback or config mutation |
+| Lifecycle regressions | `go test -count=1 -v -run '^TestOpenCodeMigration(RealBinaryRequiresExplicitReplacement|PlainEnableCreatesRestorableBackup)$' .` → exit 0; R9 conflict/replacement passed and R12 real enable→rollback restored 54 bytes with SHA-256 `1699ac0e251ff28ea53a07ad47734c28369f8512cc2d31a49571f53f1d08abcc` |
+| Full Go | `go test -count=1 ./...` → exit 0; package `28.129s` |
+| Full Node | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `11.274389097s`; no cold-cache timeout occurred after the Go cache prime |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | The harness uses fresh temporary HOME, ACM_DIR, ACM_SHARE_DIR, bin, OpenCode config, TMPDIR, GOCACHE, GOMODCACHE, and build roots; `GOPROXY=off`; fake `curl` serves repository/release bytes; simulated host aliases, credentials, config, default targets, and a custom-share target remain byte-identical; cleanup proves the root is absent |
+| Review budget | Product/test/docs/spec delta before OpenSpec delivery metadata: 105 additions + 23 deletions = **128/300 changed lines**; complete slice including OpenSpec delivery metadata is 138 additions + 29 deletions = **167 changed lines** |
+| Diff/refactor review | The complete 18.3 diff preserves the installer seven-asset list and atomic staging, R9 explicit replacement/conflict behavior, R12 unconditional backup + exact rollback, exit taxonomy, and all adapter/machine behavior; no out-of-scope behavior changed |
+| Rollback boundary | Revert only custom-share resolution in `opencode_lifecycle.go`, the R13 `install.test.js` harness additions, lifecycle-spec override scenarios, README override guidance, and Phase 18 metadata. R8 distribution, R9 migration, R12 backup reachability, and all machine/adapter behavior remain intact. |

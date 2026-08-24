@@ -54,8 +54,12 @@ func enableOpenCode(home string, replaceUpstream bool) error {
 	}
 	plugin := os.Getenv("ACM_OPENCODE_PLUGIN_PATH")
 	if plugin == "" {
-		h, _ := os.UserHomeDir()
-		plugin = filepath.Join(h, ".local", "share", "acm", "opencode", "index.js")
+		share := os.Getenv("ACM_SHARE_DIR")
+		if share == "" {
+			h, _ := os.UserHomeDir()
+			share = filepath.Join(h, ".local", "share", "acm")
+		}
+		plugin = filepath.Join(share, "opencode", "index.js")
 	}
 	info, err := os.Lstat(plugin)
 	if err != nil || !info.Mode().IsRegular() {
