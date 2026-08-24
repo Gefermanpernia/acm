@@ -23,7 +23,7 @@ Un solo comando, desde **cualquier shell** (bash, zsh, fish, ...) en Linux/WSL y
 curl -fsSL https://raw.githubusercontent.com/Gefermanpernia/acm/main/install.sh | sh
 ```
 
-El instalador descarga el binario correcto para tu sistema, lo deja en `~/.local/bin/acm`, añade los aliases (`cl`, `cx`, `clp`, `cxp`) a bash, zsh **y** fish (solo en los que existan, sin duplicar) y adopta tus logins actuales como perfil `principal`. Variables opcionales: `ACM_VERSION=v2.0.0`, `ACM_BIN_DIR=~/bin`.
+El instalador descarga el binario correcto para tu sistema, lo deja en `~/.local/bin/acm`, añade los aliases (`cl`, `cx`, `clp`, `cxp`) a bash, zsh **y** fish (solo en los que existan, sin duplicar) y adopta tus logins actuales como perfil `principal`. Variables opcionales: `ACM_VERSION=v2.0.0`, `ACM_BIN_DIR=~/bin`, `ACM_SHARE_DIR=~/ruta/compartida/acm`.
 
 Alternativas:
 
@@ -57,6 +57,29 @@ alias cxp="acm run codex"    # codex exec con failover
 ```
 
 Flujo típico cuando la TUI anuncia "límite alcanzado": sales, `acm limit claude 16:00` (la hora que te dijo), vuelves a lanzar `cl` y sigues en la otra cuenta. Los cooldowns expiran solos.
+
+## OpenCode transparent failover
+
+El instalador incluye, pero deja **deshabilitado**, el adaptador experimental ES modules de `integrations/opencode/`. Solo admite Linux y perfiles ACM con credenciales válidas. La compatibilidad de la API la rige el rango declarado `@opencode-ai/plugin: ^1.18.18`; la detección de Claude CLI es solo diagnóstica y su ausencia o una versión no exacta no impiden cargar el adaptador.
+La frontera estable es `acm machine v1 <operation>` por stdin/stdout, con entrada máxima de 64 KiB y salida máxima de 16 KiB. Implementa `credential.select`, `diagnostics.status`, `oauth.refresh.begin|commit|abort` y `quota.exhaust`. ACM selecciona el perfil y devuelve su directorio de configuración; el adaptador lee allí `.credentials.json`, mantiene el token solo en memoria, nunca escribe `auth.json` de OpenCode y nunca registra credenciales.
+La rotación es deliberadamente conservadora:
+- Requiere simultáneamente HTTP 429, el error tipado `rate_limit_error` y `anthropic-ratelimit-unified-status: rejected`. Un 429 genérico o cualquier 529 pasa sin cambios.
+- Enfriamiento y cuarentena son resultados distintos. ACM aplica su propia política de cooldown cuando no existe un reset válido; una cuarentena exige `acm login`.
+- Reintentos, backoff, esperas y continuidad de sesión pertenecen a OpenCode. El adaptador hace una sola llamada al proveedor por intento.
+El instalador y el comando de activación respetan `ACM_SHARE_DIR`: cuando está definida, ambos usan `ACM_SHARE_DIR/opencode/index.js`; cuando no lo está, usan `~/.local/share/acm/opencode/index.js`. Si define una ruta personalizada y allí no existe un adaptador válido, la activación se detiene sin buscar en la ruta predeterminada ni modificar la configuración.
+
+Para habilitarla, cierre OpenCode y ejecute:
+
+```sh
+acm opencode enable --confirm
+```
+El comando valida `opencode.json` o `opencode.jsonc`. Si detecta `opencode-anthropic-login-via-cli`, solo o junto con el adaptador ACM, se detiene sin modificar la configuración ni crear respaldos. Revise el conflicto y confirme la migración de forma explícita:
+
+```sh
+acm opencode enable --confirm --replace-upstream
+```
+
+Solo esta ruta reemplaza el plugin upstream. Tanto la activación directa como la migración explícita crean un respaldo con checksum antes de modificar la configuración. Después reinicie OpenCode. Para deshacer cualquiera de las dos rutas, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
 
 ## Cómo funciona
 

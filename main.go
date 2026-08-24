@@ -42,11 +42,11 @@ const version = "2.0.0"
 // ---------- configuración global ----------
 
 var (
-	homeDir string
-	acmDir  string
-	profDir string
-	stateDir string
-	coolDir string
+	homeDir            string
+	acmDir             string
+	profDir            string
+	stateDir           string
+	coolDir            string
 	defaultCooldownMin = 60
 )
 
@@ -63,6 +63,7 @@ type tool struct {
 
 var toolOrder = []string{"claude", "codex"}
 var tools map[string]*tool
+var loginInteractive = runInteractive
 
 func initGlobals() {
 	var err error
@@ -530,7 +531,8 @@ func cmdInit() int {
 	return cmdLs()
 }
 
-func cmdLs() int {
+func cmdLs(redactProfileIdentifiers ...bool) int {
+	redact := len(redactProfileIdentifiers) > 0 && redactProfileIdentifiers[0]
 	for _, name := range toolOrder {
 		t := tools[name]
 		bin, err := exec.LookPath(binFor(t))
@@ -545,6 +547,10 @@ func cmdLs() int {
 		}
 		cur := getCurrent(t)
 		for _, p := range ps {
+			displayName := p
+			if redact {
+				displayName = safeDiagnostic(p)
+			}
 			mark := " "
 			if p == cur {
 				mark = "*"
@@ -552,17 +558,20 @@ func cmdLs() int {
 			var stat string
 			switch {
 			case !loggedIn(t, p):
-				stat = fmt.Sprintf("sin login → acm login %s %s", t.name, p)
+				stat = fmt.Sprintf("sin login → acm login %s %s", t.name, displayName)
 			case inCooldown(t, p):
 				stat = "límite alcanzado, libre a las " + fmtEpoch(cooldownUntil(t, p))
 			default:
 				stat = "disponible"
 			}
-			id := identityOf(t, p)
+			id := ""
+			if !redact {
+				id = identityOf(t, p)
+			}
 			if id != "" {
 				id = "  [" + id + "]"
 			}
-			fmt.Printf(" %s %-12s %s%s\n", mark, p, stat, id)
+			fmt.Printf(" %s %-12s %s%s\n", mark, displayName, stat, id)
 		}
 	}
 	return 0
@@ -580,8 +589,27 @@ func cmdDoctor() int {
 	fmt.Printf("acm    : v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 	fmt.Println("estado : " + acmDir)
 	fmt.Printf("cooldown por defecto: %dm\n", defaultCooldownMin)
+	state, err := loadMachineState()
+	if err != nil {
+		fmt.Println("opencode diagnostics: unavailable")
+	} else {
+		diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
+		fmt.Printf("opencode diagnostics: %d; active leases: %d\n", len(diagnostics), active)
+		counts := make(map[string]int)
+		for _, event := range diagnostics {
+			counts[event.Component+"."+event.Event+"."+event.Outcome]++
+		}
+		keys := make([]string, 0, len(counts))
+		for key := range counts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Printf("  %s: %d\n", key, counts[key])
+		}
+	}
 	fmt.Println()
-	return cmdLs()
+	return cmdLs(true)
 }
 
 func seedProfile(t *tool, dst string) {
@@ -628,21 +656,35 @@ func cmdLogin(args []string) int {
 	if !profileExists(t, name) {
 		die("no existe el perfil '" + name + "' (créalo: acm add " + t.name + " " + name + ")")
 	}
-	var rc int
+	defer os.Remove(coolFile(t, name))
+	var rc, recoveryExit int
+	var generation uint64
+	var quarantined bool
+	var credentialBefore []byte
 	switch t.name {
 	case "claude":
+		generation, quarantined, recoveryExit = machineLoginState(name)
+		if recoveryExit != 0 {
+			return recoveryExit
+		}
+		credentialBefore, _ = os.ReadFile(filepath.Join(resolvedDir(t, name), t.credFile))
 		fmt.Printf("→ Abriendo Claude Code con el perfil '%s'.\n", name)
 		fmt.Println("  Si ya hay sesión de otra cuenta, usa /login dentro; termina con /exit.")
-		rc = runInteractive(t, name, nil)
+		rc = loginInteractive(t, name, nil)
+		if rc == 0 && quarantined {
+			credentialAfter, err := os.ReadFile(filepath.Join(resolvedDir(t, name), t.credFile))
+			if err != nil || bytes.Equal(credentialBefore, credentialAfter) {
+				return machineExitUnavailable
+			}
+			rc = recoverMachineProfile(name, generation)
+		}
 	case "codex":
 		// device-auth: el flujo de navegador (localhost:1455) suele fallar en WSL
-		rc = runInteractive(t, name, []string{"login", "--device-auth"})
+		rc = loginInteractive(t, name, []string{"login", "--device-auth"})
 		if rc != 0 {
-			rc = runInteractive(t, name, []string{"login"})
+			rc = loginInteractive(t, name, []string{"login"})
 		}
 	}
-	// tras el login, la cuenta vuelve a estar operativa
-	_ = os.Remove(coolFile(t, name))
 	return rc
 }
 
@@ -1145,6 +1187,8 @@ func usage() {
   acm free <tool> <perfil>    quita la marca de límite
   acm quota [tool] [--raw]    cuota restante por cuenta SIN gastar tokens
   acm run <tool> [args...]    no-interactivo con failover (claude -p / codex exec)
+  acm machine v1 <operation>  bounded, secretless JSON integration API
+  acm opencode enable|rollback --confirm   integración experimental OpenCode
   acm <tool> [args...]        interactivo en el primer perfil disponible
 
 tools: claude | codex
@@ -1182,6 +1226,10 @@ func main() {
 		rc = cmdFree(rest)
 	case "run":
 		rc = cmdRun(rest)
+	case "machine":
+		rc = cmdMachine(rest)
+	case "opencode":
+		rc = cmdOpenCode(rest)
 	case "quota":
 		rc = cmdQuota(rest)
 	case "claude", "codex":

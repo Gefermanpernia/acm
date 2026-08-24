@@ -16,6 +16,7 @@ set -eu
 REPO="Gefermanpernia/acm"
 VERSION="${ACM_VERSION:-latest}"
 BIN_DIR="${ACM_BIN_DIR:-$HOME/.local/bin}"
+SHARE_DIR="${ACM_SHARE_DIR:-$HOME/.local/share/acm}"
 
 say() { printf '%s\n' "$*"; }
 
@@ -58,6 +59,37 @@ chmod +x "$tmp"
 mv "$tmp" "$BIN_DIR/acm"
 trap - EXIT
 say "✓ acm instalado: $BIN_DIR/acm ($("$BIN_DIR/acm" version 2>/dev/null || echo ok))"
+
+plugin_tmp=$(mktemp -d)
+plugin_stage=""
+plugin_old=""
+cleanup_plugin() {
+  [ -z "$plugin_tmp" ] || rm -rf "$plugin_tmp"
+  [ -z "$plugin_stage" ] || rm -rf "$plugin_stage"
+  if [ -n "$plugin_old" ] && [ -d "$plugin_old" ] && [ ! -d "$SHARE_DIR/opencode" ]; then
+    mv "$plugin_old" "$SHARE_DIR/opencode"
+  fi
+}
+trap cleanup_plugin EXIT
+ref=main; [ "$VERSION" = latest ] || ref="$VERSION"
+for file in index.js machine.js oauth.js compat.js quota.js diagnostics.js package.json; do
+  raw="https://raw.githubusercontent.com/$REPO/$ref/integrations/opencode/$file"
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$raw" -o "$plugin_tmp/$file"
+  else wget -qO "$plugin_tmp/$file" "$raw"; fi
+done
+mkdir -p "$SHARE_DIR"
+plugin_stage="$SHARE_DIR/.opencode-new-$$"
+plugin_old="$SHARE_DIR/.opencode-old-$$"
+rm -rf "$plugin_stage" "$plugin_old"
+mv "$plugin_tmp" "$plugin_stage"
+plugin_tmp=""
+[ ! -d "$SHARE_DIR/opencode" ] || mv "$SHARE_DIR/opencode" "$plugin_old"
+mv "$plugin_stage" "$SHARE_DIR/opencode"
+plugin_stage=""
+rm -rf "$plugin_old"
+plugin_old=""
+trap - EXIT
+say "✓ adaptador OpenCode incluido (deshabilitado): $SHARE_DIR/opencode"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;

@@ -1,0 +1,23 @@
+{
+  "confirmed": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "anthropic-ratelimit-unified-status": "rejected",
+      "anthropic-ratelimit-unified-reset": "2000000000"
+    },
+    "body": {
+      "type": "error",
+      "error": { "type": "rate_limit_error", "message": "synthetic quota" }
+    }
+  },
+  "generic": [
+    { "status": 401, "body": { "error": { "type": "authentication_error" } } },
+    { "status": 429, "body": { "error": { "type": "rate_limit_error" } } },
+    { "status": 529, "body": { "error": { "type": "overloaded_error" } } }
+  ],
+  "selection": { "profile": "alpha", "config_dir": "/synthetic", "generation": 7 },
+  "credentials": {
+    "claudeAiOauth": { "accessToken": "synthetic-access", "refreshToken": "synthetic-refresh", "expiresAt": 9999999999999 }
+  }
+}

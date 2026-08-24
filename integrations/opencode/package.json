@@ -1,0 +1,15 @@
+{
+  "name": "acm-opencode-anthropic-integration",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.18"
+  }
+}

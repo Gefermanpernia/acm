@@ -1,0 +1,466 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+const testMachineRequest = `{"schema_version":1,"operation":"credential.select","operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
+const testCredential = `{"other":"kept","claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1}}`
+
+type machineResponse struct {
+	Profile      string              `json:"profile"`
+	ConfigDir    string              `json:"config_dir"`
+	Generation   uint64              `json:"generation"`
+	LeaseID      string              `json:"lease_id"`
+	Outcome      string              `json:"outcome"`
+	ResetAt      int64               `json:"reset_at"`
+	Diagnostics  []machineDiagnostic `json:"diagnostics"`
+	ActiveLeases int                 `json:"active_leases"`
+	Error        *struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		Retryable bool   `json:"retryable"`
+	} `json:"error"`
+}
+
+func diagnosticRequest(id int, component, event, outcome string) string {
+	return fmt.Sprintf(`{"schema_version":1,"operation":"diagnostics.record","operation_id":"%064x","component":%q,"event":%q,"outcome":%q,"retryable":true}`, id, component, event, outcome)
+}
+
+func check(t *testing.T, ok bool, format string, args ...any) {
+	if !ok {
+		t.Fatalf(format, args...)
+	}
+}
+
+func setupMachineV1Test(t *testing.T, profiles ...string) *tool {
+	oldHome, oldACM, oldProf, oldState, oldCool, oldTools := homeDir, acmDir, profDir, stateDir, coolDir, tools
+	t.Cleanup(func() {
+		homeDir, acmDir, profDir, stateDir, coolDir, tools = oldHome, oldACM, oldProf, oldState, oldCool, oldTools
+	})
+	homeDir = t.TempDir()
+	acmDir, profDir = filepath.Join(homeDir, ".acm"), filepath.Join(homeDir, ".acm", "profiles")
+	stateDir, coolDir = filepath.Join(acmDir, "state"), filepath.Join(acmDir, "state", "cooldown")
+	claude := &tool{name: "claude", credFile: ".credentials.json", defaultHome: filepath.Join(homeDir, ".claude")}
+	tools = map[string]*tool{"claude": claude}
+	for _, name := range profiles {
+		dir := profilePath(claude, name)
+		check(t, os.MkdirAll(dir, 0o755) == nil, "create profile %s", name)
+		check(t, os.WriteFile(filepath.Join(dir, claude.credFile), []byte(testCredential), 0o600) == nil, "create credential %s", name)
+	}
+	return claude
+}
+
+func oauthRequest(operation string, id byte, fields string) string {
+	return fmt.Sprintf(`{"schema_version":1,"operation":%q,"operation_id":%q,%s}`, operation, strings.Repeat(string(id), 64), fields)
+}
+
+func quotaRequest(id byte, profile string, generation uint64, resetAt int64) string {
+	return oauthRequest("quota.exhaust", id, fmt.Sprintf(`"profile":%q,"generation":%d,"reset_at":%d`, profile, generation, resetAt))
+}
+
+func beginOAuthRefresh(t *testing.T, id byte) (machineResponse, uint64) {
+	code, selection, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0, "select response = %+v, exit = %d", selection, code)
+	input := oauthRequest("oauth.refresh.begin", id, fmt.Sprintf(`"profile":"alpha","generation":%d`, selection.Generation))
+	code, response, _ := invokeMachine(t, "oauth.refresh.begin", input)
+	check(t, code == 0 && response.LeaseID != "", "begin response = %+v, exit = %d", response, code)
+	return response, selection.Generation
+}
+
+func TestOAuthRefreshLeaseIsBusyThenReusableAfterExpiry(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	first, generation := beginOAuthRefresh(t, 'b')
+	code, busy, _ := invokeMachine(t, "oauth.refresh.begin", oauthRequest("oauth.refresh.begin", 'c', `"profile":"alpha","generation":1`))
+	check(t, code == 75 && busy.Error != nil && busy.Error.Code == "lease_busy", "busy response = %+v, exit = %d", busy, code)
+
+	state, err := loadMachineState()
+	check(t, err == nil && len(state.Leases) == 1, "load lease state: %+v, %v", state, err)
+	state.Leases[0].ExpiresAt = time.Now().Add(-time.Second).Unix()
+	check(t, saveMachineState(state) == nil, "expire lease")
+	input := oauthRequest("oauth.refresh.begin", 'd', fmt.Sprintf(`"profile":"alpha","generation":%d`, generation))
+	code, second, _ := invokeMachine(t, "oauth.refresh.begin", input)
+	check(t, code == 0, "second begin = %+v, exit = %d", second, code)
+	check(t, second.LeaseID != first.LeaseID, "expired lease was reused")
+}
+
+func TestOAuthRefreshCommitFailsClosedOnStaleWriteAndFsync(t *testing.T) {
+	tests := []struct {
+		name    string
+		breakIO func()
+		code    string
+	}{
+		{"stale generation", func() {
+			state, _ := loadMachineState()
+			state.Generation++
+			check(t, saveMachineState(state) == nil, "advance generation")
+		}, "stale_generation"},
+		{"expired lease", func() {
+			state, _ := loadMachineState()
+			state.Leases[0].ExpiresAt = time.Now().Add(-time.Second).Unix()
+			check(t, saveMachineState(state) == nil, "expire lease")
+		}, "lease_expired"},
+		{"write failure", func() { machinePersist = func(string, []byte) error { return errors.New("secret write detail") } }, "persistence_failed"},
+		{"fsync failure", func() { machineSync = func(*os.File) error { return errors.New("secret sync detail") } }, "persistence_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			lease, generation := beginOAuthRefresh(t, 'b')
+			oldPersist, oldSync := machinePersist, machineSync
+			defer func() { machinePersist, machineSync = oldPersist, oldSync }()
+			test.breakIO()
+			input := oauthRequest("oauth.refresh.commit", 'c', fmt.Sprintf(`"profile":"alpha","generation":%d,"lease_id":%q,"access_token":"new-access","refresh_token":"new-refresh","expires_at":99`, generation, lease.LeaseID))
+			code, response, raw := invokeMachine(t, "oauth.refresh.commit", input)
+			check(t, code != 0 && response.Error != nil && response.Error.Code == test.code, "commit response = %+v, exit = %d", response, code)
+			credential, _ := os.ReadFile(filepath.Join(profilePath(tools["claude"], "alpha"), ".credentials.json"))
+			check(t, string(credential) == testCredential, "credential changed after failure: %s", credential)
+			check(t, !strings.Contains(raw, "new-access") && !strings.Contains(raw, "new-refresh") && !strings.Contains(raw, "detail"), "secret leaked: %s", raw)
+		})
+	}
+}
+
+func TestOAuthRefreshCommitIsAtomic0600AndSecretless(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	lease, generation := beginOAuthRefresh(t, 'b')
+	input := oauthRequest("oauth.refresh.commit", 'c', fmt.Sprintf(`"profile":"alpha","generation":%d,"lease_id":%q,"access_token":"new-access","refresh_token":"new-refresh","expires_at":99`, generation, lease.LeaseID))
+	code, response, raw := invokeMachine(t, "oauth.refresh.commit", input)
+	check(t, code == 0 && response.Generation == generation+1 && strings.Contains(raw, `"outcome":"committed"`), "commit response = %+v, exit = %d", response, code)
+	path := filepath.Join(profilePath(tools["claude"], "alpha"), ".credentials.json")
+	credential, err := os.ReadFile(path)
+	check(t, err == nil && strings.Contains(string(credential), `"other":"kept"`) && strings.Contains(string(credential), "new-refresh"), "credential = %s, err = %v", credential, err)
+	info, _ := os.Stat(path)
+	check(t, info.Mode().Perm() == 0o600, "credential mode = %o", info.Mode().Perm())
+	temps, _ := filepath.Glob(path + ".tmp-*")
+	state, _ := os.ReadFile(machineStateFile())
+	check(t, len(temps) == 0 && !strings.Contains(raw+string(state), "new-access") && !strings.Contains(raw+string(state), "new-refresh"), "secret or temporary file escaped commit")
+}
+
+func TestMachineAtomicWriteSyncsParentAfterRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	oldSync := machineSync
+	t.Cleanup(func() { machineSync = oldSync })
+	var syncs []string
+	machineSync = func(file *os.File) error {
+		info, err := file.Stat()
+		check(t, err == nil, "stat sync target: %v", err)
+		if info.IsDir() {
+			_, err = os.Stat(path)
+			check(t, err == nil, "directory synced before rename: %v", err)
+			syncs = append(syncs, "directory")
+		} else {
+			syncs = append(syncs, "file")
+		}
+		return nil
+	}
+	check(t, atomicWriteMachineFile(path, []byte("durable\n")) == nil, "atomic write")
+	check(t, slices.Equal(syncs, []string{"file", "directory"}), "sync order = %v", syncs)
+}
+
+func TestOAuthRefreshAbortQuarantinesOnlyTerminalReasons(t *testing.T) {
+	tests := []struct {
+		reason      string
+		quarantined bool
+	}{{"invalid_grant", true}, {"revoked", true}, {"unrecoverable", true}, {"network_error", false}}
+	for _, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			lease, _ := beginOAuthRefresh(t, 'b')
+			input := oauthRequest("oauth.refresh.abort", 'c', fmt.Sprintf(`"profile":"alpha","lease_id":%q,"reason":%q`, lease.LeaseID, test.reason))
+			code, response, _ := invokeMachine(t, "oauth.refresh.abort", input)
+			check(t, code == 0, "abort response = %+v, exit = %d", response, code)
+			code, _, _ = invokeMachine(t, "credential.select", strings.Replace(testMachineRequest, strings.Repeat("a", 64), strings.Repeat("d", 64), 1))
+			check(t, (code == machineExitUnavailable) == test.quarantined, "reason %q quarantine=%v exit=%d", test.reason, test.quarantined, code)
+		})
+	}
+}
+
+func TestMachineRefreshLeaseProcessKillBeforeCommit(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	check(t, withMachineState(func() error { return saveMachineState(machineState{Generation: 1}) }) == nil, "seed generation")
+	bin := filepath.Join(t.TempDir(), "acm")
+	output, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	check(t, err == nil, "build: %v\n%s", err, output)
+	run := func(operation, input string) (int, string, string) {
+		cmd := exec.Command(bin, "machine", "v1", operation)
+		cmd.Env, cmd.Stdin = append(os.Environ(), "HOME="+homeDir, "ACM_DIR="+acmDir), strings.NewReader(input)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		stdout, err := cmd.Output()
+		if err == nil {
+			return 0, string(stdout), stderr.String()
+		}
+		return err.(*exec.ExitError).ExitCode(), string(stdout), stderr.String()
+	}
+	begin := oauthRequest("oauth.refresh.begin", 'b', `"profile":"alpha","generation":1`)
+	code, stdout, stderr := run("oauth.refresh.begin", begin)
+	check(t, code == 0 && stderr == "" && strings.Contains(stdout, `"lease_id"`), "process begin exit=%d stdout=%s stderr=%q", code, stdout, stderr)
+	code, stdout, stderr = run("oauth.refresh.begin", oauthRequest("oauth.refresh.begin", 'c', `"profile":"alpha","generation":1`))
+	check(t, code == 75 && stderr == "" && strings.Contains(stdout, "lease_busy"), "post-kill begin exit=%d stdout=%s stderr=%q", code, stdout, stderr)
+}
+
+func invokeMachine(t *testing.T, operation, input string) (int, machineResponse, string) {
+	var output bytes.Buffer
+	code := runMachine([]string{"v1", operation}, strings.NewReader(input), &output)
+	var response machineResponse
+	check(t, json.Unmarshal(output.Bytes(), &response) == nil, "decode %s", output.String())
+	return code, response, output.String()
+}
+
+func assertMachineError(t *testing.T, args []string, input, want string) {
+	var output bytes.Buffer
+	code := runMachine(args, strings.NewReader(input), &output)
+	var response machineResponse
+	check(t, json.Unmarshal(output.Bytes(), &response) == nil, "decode %s", output.String())
+	check(t, code == machineExitInvalid && response.Error != nil && response.Error.Code == want, "response = %+v, exit = %d", response, code)
+}
+
+func TestMachineProtocolRejectsUnknownVersionAndField(t *testing.T) {
+	assertMachineError(t, []string{"v2", "credential.select"}, testMachineRequest, "unsupported_version")
+	assertMachineError(t, []string{"v1", "credential.select"}, strings.TrimSuffix(testMachineRequest, "}")+`,"token":"secret"}`, "invalid_request")
+}
+
+func TestMachineSelectIsDeterministicSecretlessAndCanonical(t *testing.T) {
+	claude := setupMachineV1Test(t)
+	check(t, os.MkdirAll(claude.defaultHome, 0o755) == nil, "create principal")
+	check(t, os.WriteFile(filepath.Join(claude.defaultHome, claude.credFile), nil, 0o600) == nil, "create principal credential")
+	check(t, os.MkdirAll(filepath.Dir(profilePath(claude, "principal")), 0o755) == nil, "create profile root")
+	check(t, os.Symlink(claude.defaultHome, profilePath(claude, "principal")) == nil, "link principal")
+
+	code, response, raw := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0 && response.Profile == "principal" && response.ConfigDir == claude.defaultHome && response.Generation == 1, "response = %+v, exit = %d", response, code)
+	want := fmt.Sprintf("{\"config_dir\":%q,\"generation\":1,\"ok\":true,\"operation\":\"credential.select\",\"operation_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"profile\":\"principal\",\"schema_version\":1}\n", claude.defaultHome)
+	check(t, raw == want, "non-canonical JSON:\n got %s want %s", raw, want)
+	check(t, !strings.Contains(strings.ToLower(raw), "token") && !strings.Contains(raw, ".credentials.json"), "secret-bearing output: %s", raw)
+	statusCode, status, _ := invokeMachine(t, "diagnostics.status", strings.Replace(testMachineRequest, "credential.select", "diagnostics.status", 1))
+	check(t, statusCode == 0 && status.Generation == 1, "status = %+v, exit = %d", status, statusCode)
+}
+
+func TestMachineSelectRejectsSymlinkEscape(t *testing.T) {
+	claude := setupMachineV1Test(t)
+	escape := filepath.Join(homeDir, "escape")
+	check(t, os.MkdirAll(escape, 0o755) == nil, "create escape")
+	check(t, os.WriteFile(filepath.Join(escape, claude.credFile), nil, 0o600) == nil, "create escaped credential")
+	check(t, os.MkdirAll(filepath.Dir(profilePath(claude, "evil")), 0o755) == nil, "create profile root")
+	check(t, os.Symlink(escape, profilePath(claude, "evil")) == nil, "link escape")
+	code, response, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == machineExitInvalid && response.Error != nil && response.Error.Code == "invalid_profile_path", "response = %+v, exit = %d", response, code)
+}
+
+func TestMachineLedgerIsOncePerProfileStaleAndBounded(t *testing.T) {
+	setupMachineV1Test(t, "alpha", "beta")
+	firstCode, first, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	secondCode, second, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	thirdCode, third, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, firstCode == 0 && secondCode == 0 && first.Profile != second.Profile, "profiles were not consumed once: %+v %+v", first, second)
+	check(t, thirdCode == machineExitUnavailable && third.Error != nil && third.Error.Code == "no_available_profile", "third response = %+v, exit = %d", third, thirdCode)
+	state, err := loadMachineState()
+	check(t, err == nil, "load state: %v", err)
+	state.Operations[0].UpdatedAt = time.Now().Add(-machineLedgerTTL - time.Second).Unix()
+	for i := 0; i <= machineLedgerMax; i++ {
+		state.Operations = append(state.Operations, machineOperation{ID: fmt.Sprintf("%064x", i+1), UpdatedAt: time.Now().Unix()})
+	}
+	state.Operations = pruneMachineLedger(state.Operations, time.Now().Unix())
+	check(t, len(state.Operations) == machineLedgerMax, "ledger records = %d, want %d", len(state.Operations), machineLedgerMax)
+	check(t, saveMachineState(state) == nil, "save state")
+	code, response, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0, "stale operation was not reusable: %+v, exit = %d", response, code)
+}
+
+func TestMachineDiagnosticsAreBoundedRedactedAnd0600(t *testing.T) {
+	setupMachineV1Test(t)
+	stale := machineDiagnostic{Time: time.Now().Add(-machineLedgerTTL - time.Second).UnixMilli(), Component: "oauth", Event: "refresh", Outcome: "failed"}
+	check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(machineState{Diagnostics: []machineDiagnostic{stale}}) == nil, "seed stale diagnostic")
+	for i := 1; i <= machineDiagnosticMax+1; i++ {
+		component, event, outcome := "/private/profile/path", "secret-token", "identifier-123"
+		if i == machineDiagnosticMax+1 {
+			component, event, outcome = "quota", "transition", "cooling"
+		}
+		code, response, _ := invokeMachine(t, "diagnostics.record", diagnosticRequest(i, component, event, outcome))
+		check(t, code == 0 && response.Outcome == "recorded", "record %d = %+v, exit = %d", i, response, code)
+	}
+	state, err := loadMachineState()
+	check(t, err == nil && len(state.Diagnostics) == machineDiagnosticMax, "diagnostics = %d, err = %v", len(state.Diagnostics), err)
+	check(t, state.Diagnostics[0].Time > stale.Time && state.Diagnostics[len(state.Diagnostics)-1].Outcome == "cooling", "ring was not pruned: %+v", state.Diagnostics)
+	raw, _ := os.ReadFile(machineStateFile())
+	unsafe := string(raw)
+	check(t, !strings.Contains(unsafe, "secret-token") && !strings.Contains(unsafe, "/private/") && !strings.Contains(unsafe, "identifier-123") && !strings.Contains(unsafe, fmt.Sprintf("%064x", machineDiagnosticMax+1)), "unsafe diagnostic state: %s", unsafe)
+	info, _ := os.Stat(machineStateFile())
+	check(t, info.Mode().Perm() == 0o600, "diagnostic mode = %o", info.Mode().Perm())
+	code, status, _ := invokeMachine(t, "diagnostics.status", strings.Replace(testMachineRequest, "credential.select", "diagnostics.status", 1))
+	check(t, code == 0 && len(status.Diagnostics) == 64 && status.ActiveLeases == 0, "status = %+v, exit = %d", status, code)
+}
+
+func TestMachineLoginRecoveryFailsClosedOnPersistenceError(t *testing.T) {
+	setupMachineV1Test(t, "alpha", "beta")
+	initial := machineState{Generation: 7, Quarantined: []string{"alpha", "beta"}, Cooling: map[string]int64{"alpha": 11, "beta": 22}}
+	check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(initial) == nil, "seed recovery state")
+	before, _ := os.ReadFile(machineStateFile())
+	old := machinePersist
+	machinePersist = func(string, []byte) error { return errors.New("private persistence detail") }
+	t.Cleanup(func() { machinePersist = old })
+
+	check(t, recoverMachineProfile("alpha", 7) == 74, "persistence failure must fail closed")
+	after, _ := os.ReadFile(machineStateFile())
+	check(t, string(after) == string(before) && !strings.Contains(string(after), "private"), "failed recovery changed or leaked state: %s", after)
+}
+
+func TestMachineSelectDistinguishesCoolingAndQuarantinedProfiles(t *testing.T) {
+	now := time.Now().Unix()
+	tests := []struct {
+		name      string
+		state     machineState
+		exit      int
+		code      string
+		message   string
+		retryable bool
+		resetAt   int64
+	}{
+		{"all cooling uses earliest reset", machineState{Cooling: map[string]int64{"alpha": now + 300, "beta": now + 120}}, 75, "no_available_profile", "ACM profiles are cooling", true, now + 120},
+		{"all quarantined requires login", machineState{Quarantined: []string{"alpha", "beta"}, Cooling: map[string]int64{"alpha": now + 60}}, machineExitUnavailable, "credential_quarantined", "credential requires acm login", false, 0},
+		{"mixed ignores quarantined reset", machineState{Quarantined: []string{"alpha"}, Cooling: map[string]int64{"alpha": now + 60, "beta": now + 180}}, 75, "no_available_profile", "ACM profiles are cooling", true, now + 180},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha", "beta")
+			check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(test.state) == nil, "seed state")
+			code, response, raw := invokeMachine(t, "credential.select", testMachineRequest)
+			check(t, code == test.exit && response.Error != nil, "response = %+v, exit = %d", response, code)
+			check(t, response.Error.Code == test.code && response.Error.Message == test.message && response.Error.Retryable == test.retryable, "error = %+v", response.Error)
+			check(t, response.ResetAt == test.resetAt, "reset_at = %d, want %d", response.ResetAt, test.resetAt)
+			if test.resetAt == 0 {
+				check(t, !strings.Contains(raw, `"reset_at"`), "non-retryable response fabricated reset: %s", raw)
+			} else {
+				want := fmt.Sprintf("{\"error\":{\"code\":%q,\"message\":%q,\"retryable\":true},\"ok\":false,\"operation\":\"credential.select\",\"operation_id\":\"%s\",\"reset_at\":%d,\"schema_version\":1}\n", test.code, test.message, strings.Repeat("a", 64), test.resetAt)
+				check(t, raw == want, "non-canonical JSON:\n got %s want %s", raw, want)
+			}
+		})
+	}
+}
+
+func TestMachineCLIProcessBounds(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	bin := filepath.Join(t.TempDir(), "acm")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	output, err := build.CombinedOutput()
+	check(t, err == nil, "build: %v\n%s", err, output)
+	run := func(input string) (int, string, string) {
+		cmd := exec.Command(bin, "machine", "v1", "credential.select")
+		cmd.Env = append(os.Environ(), "HOME="+homeDir, "ACM_DIR="+acmDir)
+		cmd.Stdin = strings.NewReader(input)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		if err == nil {
+			return 0, stdout.String(), stderr.String()
+		}
+		return err.(*exec.ExitError).ExitCode(), stdout.String(), stderr.String()
+	}
+	code, stdout, stderr := run(testMachineRequest)
+	check(t, code == 0 && stderr == "" && len(stdout) <= machineMaxOutputBytes, "normal process: exit=%d stdout=%d stderr=%q", code, len(stdout), stderr)
+	code, stdout, stderr = run(strings.Repeat("x", machineMaxInputBytes+1))
+	check(t, code == machineExitInvalid && stderr == "" && len(stdout) <= machineMaxOutputBytes, "oversized process: exit=%d stdout=%d stderr=%q", code, len(stdout), stderr)
+}
+
+func TestMachineQuotaExhaustRecordsCooldownAndIsIdempotent(t *testing.T) {
+	setupMachineV1Test(t, "alpha", "beta")
+	code, selected, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	check(t, code == 0 && selected.Profile == "alpha", "selection = %+v, exit = %d", selected, code)
+	resetAt := time.Now().Add(20 * time.Minute).Unix()
+	request := quotaRequest('a', selected.Profile, selected.Generation, resetAt)
+
+	code, exhausted, raw := invokeMachine(t, "quota.exhaust", request)
+	check(t, code == 0 && exhausted.Outcome == "cooling" && exhausted.ResetAt == resetAt && exhausted.Generation == selected.Generation+1, "exhaustion = %+v, exit = %d", exhausted, code)
+	check(t, len(raw) <= machineMaxOutputBytes && !strings.Contains(strings.ToLower(raw), "token") && !strings.Contains(raw, testCredential), "unsafe response: %s", raw)
+	state, err := loadMachineState()
+	check(t, err == nil && state.Cooling["alpha"] == resetAt && len(state.Quarantined) == 0, "state = %+v, err = %v", state, err)
+	check(t, len(state.Operations) == 1 && slices.Contains(state.Operations[0].Exhausted, "alpha"), "ledger = %+v", state.Operations)
+
+	code, repeated, _ := invokeMachine(t, "quota.exhaust", request)
+	check(t, code == 0 && repeated.ResetAt == resetAt && repeated.Generation == exhausted.Generation, "repeat = %+v, exit = %d", repeated, code)
+	code, replacement, _ := invokeMachine(t, "credential.select", strings.Replace(testMachineRequest, strings.Repeat("a", 64), strings.Repeat("b", 64), 1))
+	check(t, code == 0 && replacement.Profile == "beta", "replacement = %+v, exit = %d", replacement, code)
+}
+
+func TestMachineQuotaExhaustUsesFallbackForMissingOrInvalidReset(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+	}{{"missing", `"profile":"alpha","generation":1`},
+		{"expired", fmt.Sprintf(`"profile":"alpha","generation":1,"reset_at":%d`, time.Now().Add(-time.Minute).Unix())}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			code, _, _ := invokeMachine(t, "credential.select", testMachineRequest)
+			before := time.Now().Unix() + int64(defaultCooldownMin)*60
+			code, exhausted, _ := invokeMachine(t, "quota.exhaust", oauthRequest("quota.exhaust", 'a', test.fields))
+			after := time.Now().Unix() + int64(defaultCooldownMin)*60
+			check(t, code == 0 && exhausted.ResetAt >= before && exhausted.ResetAt <= after, "fallback = %+v, exit = %d", exhausted, code)
+		})
+	}
+}
+
+func TestMachineQuotaExhaustPersistenceFailurePreservesState(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	_, selected, _ := invokeMachine(t, "credential.select", testMachineRequest)
+	before, _ := os.ReadFile(machineStateFile())
+	oldPersist := machinePersist
+	machinePersist = func(string, []byte) error { return errors.New("private persistence detail") }
+	t.Cleanup(func() { machinePersist = oldPersist })
+
+	code, response, raw := invokeMachine(t, "quota.exhaust", quotaRequest('a', "alpha", selected.Generation, 0))
+	after, _ := os.ReadFile(machineStateFile())
+	check(t, code == 74 && response.Error != nil && response.Error.Code == "state_unavailable", "response = %+v, exit = %d", response, code)
+	check(t, string(before) == string(after) && !strings.Contains(raw, "private"), "failed persistence changed or leaked state: %s", raw)
+}
+
+func TestMachineQuotaExhaustRejectsStaleUnknownAndSecretsWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{{"stale generation", quotaRequest('a', "alpha", 99, 0)}, {"unknown profile", quotaRequest('a', "ghost", 1, 0)},
+		{"invalid operation id", strings.Replace(quotaRequest('a', "alpha", 1, 0), strings.Repeat("a", 64), "short", 1)},
+		{"access token", oauthRequest("quota.exhaust", 'a', `"profile":"alpha","generation":1,"access_token":"secret"`)},
+		{"refresh token", oauthRequest("quota.exhaust", 'a', `"profile":"alpha","generation":1,"refresh_token":"secret"`)}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupMachineV1Test(t, "alpha")
+			_, _, _ = invokeMachine(t, "credential.select", testMachineRequest)
+			before, _ := os.ReadFile(machineStateFile())
+			code, response, raw := invokeMachine(t, "quota.exhaust", test.input)
+			after, _ := os.ReadFile(machineStateFile())
+			check(t, code != 0 && response.Error != nil && string(before) == string(after), "response = %+v, exit = %d, state changed", response, code)
+			check(t, !strings.Contains(raw, "secret") && !strings.Contains(strings.ToLower(raw), "token"), "secret leaked: %s", raw)
+		})
+	}
+}
+
+func TestMachineQuotaExhaustCLIProcess(t *testing.T) {
+	setupMachineV1Test(t, "alpha")
+	bin := filepath.Join(t.TempDir(), "acm")
+	output, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput()
+	check(t, err == nil, "build: %v\n%s", err, output)
+	selectCmd := exec.Command(bin, "machine", "v1", "credential.select")
+	selectCmd.Env, selectCmd.Stdin = append(os.Environ(), "HOME="+homeDir, "ACM_DIR="+acmDir), strings.NewReader(testMachineRequest)
+	selectedJSON, err := selectCmd.Output()
+	check(t, err == nil, "select: %v\n%s", err, selectedJSON)
+	var selected machineResponse
+	check(t, json.Unmarshal(selectedJSON, &selected) == nil, "decode selection: %s", selectedJSON)
+	cmd := exec.Command(bin, "machine", "v1", "quota.exhaust")
+	cmd.Env, cmd.Stdin = selectCmd.Env, strings.NewReader(quotaRequest('a', "alpha", selected.Generation, 0))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Run()
+	check(t, err == nil && stderr.Len() == 0 && strings.Contains(stdout.String(), `"ok":true`) && len(stdout.Bytes()) <= machineMaxOutputBytes, "exhaust: %v stdout=%s stderr=%s", err, &stdout, &stderr)
+}
