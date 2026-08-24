@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R14 `Compatibility Documentation Coherence` (`feat/opencode-plugin-r14-compat-doc-coherence`)
-- Parent: `feat/opencode-plugin-r13-custom-share-install` at `8f9c0ed` under `feature-branch-chain`
+- Current slice: R15 `Doctor Legacy Visibility` (`feat/opencode-plugin-r15-doctor-visibility`)
+- Parent: `feat/opencode-plugin-r14-compat-doc-coherence` at `94cfd87` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -645,3 +645,26 @@ None.
 | Runtime harness | The focused offline factory loaded hooks `auth,chat.headers` with CLI `9.9.9` and loaded Anthropic auth with missing CLI evidence; controlled process evidence only, no machine, credential, config, or network access |
 | Regression and isolation | Isolated `go test -count=1 ./...` passed in `42.640s`; after one known 200 ms cold/concurrent subprocess-timeout flake (28/29), a warmed full Node rerun passed 29/29 in `22.128692081s`; formatting, vet, and diff checks were clean; all HOME/ACM/config/share/cache paths were temporary and removed |
 | Review and rollback | Product/test/docs: 26 additions + 10 deletions = **36/70**; complete slice with OpenSpec metadata: 52 additions + 16 deletions = **68/70 changed lines**. Revert only the README policy sentence, centralized coherence assertions, and Phase 19 metadata; R12, R13, exit taxonomy, runtime behavior, and later slices remain untouched. |
+
+## R15 Doctor Legacy Visibility
+- [x] 20.1 Added available/unavailable diagnostics RED cases requiring the exact state line, delegated profile visibility, preserved aggregates, and negative controls for profile, lease, and identity disclosure.
+- [x] 20.2 Restored `estado : <ACM_DIR>` and `cmdLs` delegation while retaining diagnostics; doctor uses the existing diagnostic redaction path and suppresses profile identities, while `acm ls` remains unchanged.
+- [x] 20.3 Proved the compiled command with isolated synthetic profiles and fake tools, reran every regression gate, and diff-read the complete refactor without finding out-of-scope behavior changes.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 20.1 | `main_test.go` | Command/filesystem | Existing doctor test passed 1/1 | Focused exit 1; both cases lacked `estado` and the profile listing | Implemented by 20.2; focused passed | Available and corrupt-state paths; aggregate and redaction controls | Shared stdout capture and fake-tool fixture |
+| 20.2 | `main.go` | CLI composition | 20.1 RED captured | R4a returned before legacy visibility | Focused exit 0 | Diagnostics success and unavailable branches both delegate | Normal `acm ls` keeps identifiers; doctor requests redaction |
+| 20.3 | Same | Compiled-binary approval | Focused GREEN passed | N/A: behavior-preserving proof/refinement | Final focused, full Go, and Node suites passed | Real binary showed two synthetic profiles without raw identifiers | Diff review found no out-of-scope behavior change |
+
+### R15 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused / RED | `go test -count=1 -run '^TestDoctor' .`: baseline exit 0; RED exit 1 on both missing state/listing cases; final exit 0 in `0.026s` |
+| Runtime harness | Compiled `acm doctor` under temp HOME/ACM_DIR/bin/cache with fake Claude/Codex showed the exact state line, `oauth.refresh.failed: 1`, and two `unknown disponible` profile rows; raw synthetic profiles/tokens were absent |
+| Full regressions | `go test -count=1 ./...` exit 0 in `28.704s`; warmed Node suite 29/29 in `12042.755947ms`; `gofmt -l .`, `go vet ./...`, and `git diff --check` exited 0 with no output |
+| Diff / rollback | Product and tests are 110 changed lines within the 150-line budget. Revert only R15 changes in `main.go`, `main_test.go`, and Phase 20 metadata; R4a aggregates and R8–R14 behavior remain intact. |
+
+## Round-5 Remediation Chain Status
+66/69 tasks complete. R15 closes W3; R16 remains pending and was not started.

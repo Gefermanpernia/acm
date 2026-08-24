@@ -199,9 +199,9 @@ Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base
 - [x] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
 
 ## Phase 20: Doctor Legacy Visibility (R15; W3)
-- [ ] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.
-- [ ] 20.2 **GREEN**: restore the state line and profile listing in `main.go` without removing diagnostic aggregates or leaking lease/profile identifiers.
-- [ ] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
+- [x] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.
+- [x] 20.2 **GREEN**: restore the state line and profile listing in `main.go` without removing diagnostic aggregates or leaking lease/profile identifiers.
+- [x] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
 
 ## Phase 21: Replay-Exception Contract (R16; W5)
 - [ ] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
