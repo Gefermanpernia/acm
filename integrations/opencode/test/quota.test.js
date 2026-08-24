@@ -1,0 +1,143 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+import { boundedDiagnostics } from "../diagnostics.js";
+import { refreshCredentials } from "../oauth.js";
+import { handleQuotaResponse } from "../quota.js";
+
+const fixture = JSON.parse(await readFile(new URL("./fixtures/quota.json", import.meta.url)));
+const operationID = "b".repeat(64);
+
+function responseFor(value) {
+  return new Response(JSON.stringify(value.body), {
+    status: value.status,
+    headers: value.headers,
+  });
+}
+
+test("transitions only confirmed Anthropic quota rejection", async () => {
+  const calls = [];
+  const result = await handleQuotaResponse(responseFor(fixture.confirmed), {
+    operationID,
+    selection: fixture.selection,
+  }, {
+    machine: async (operation, fields) => {
+      calls.push([operation, fields]);
+      return { outcome: "replacement" };
+    },
+  });
+
+  assert.equal(result.status, 429);
+  assert.equal(result.headers.get("retry-after"), null);
+  assert.deepEqual(calls, [["quota.exhaust", {
+    operation_id: operationID,
+    profile: "alpha",
+    generation: 7,
+    reset_at: 2000000000,
+  }]]);
+});
+
+test("preserves generic 401, 429, and 529 responses unchanged", async () => {
+  const responses = fixture.generic.map(responseFor);
+  const calls = [];
+  const results = await Promise.all(responses.map((response) => handleQuotaResponse(response, {
+    operationID,
+    selection: fixture.selection,
+  }, {
+    machine: async (...args) => calls.push(args),
+  })));
+
+  assert.deepEqual(results, responses);
+  assert.deepEqual(calls, []);
+});
+
+test("preserves a confirmed response when the transition is stale", async () => {
+  const original = responseFor(fixture.confirmed);
+  const result = await handleQuotaResponse(original, {
+    operationID,
+    selection: fixture.selection,
+  }, {
+    machine: async () => {
+      throw Object.assign(new Error("stale"), { code: "stale_generation" });
+    },
+  });
+
+  assert.equal(result, original);
+});
+
+test("leaves fallback cooldown selection to ACM for an invalid reset", async () => {
+  const value = structuredClone(fixture.confirmed);
+  value.headers["anthropic-ratelimit-unified-reset"] = "not-an-epoch";
+  let request;
+  await handleQuotaResponse(responseFor(value), {
+    operationID,
+    selection: fixture.selection,
+  }, {
+    machine: async (_operation, fields) => {
+      request = fields;
+      return { outcome: "replacement" };
+    },
+  });
+
+  assert.equal("reset_at" in request, false);
+});
+
+test("quarantines an unrecoverable refresh through the ACM lease", async () => {
+  const calls = [];
+  await assert.rejects(() => refreshCredentials(fixture.selection, operationID, {
+    refreshToken: "synthetic-refresh",
+  }, {
+    machine: async (operation, fields) => {
+      calls.push([operation, fields]);
+      return { lease_id: "synthetic-lease" };
+    },
+    send: async () => Response.json({ error: "unrecoverable" }, { status: 400 }),
+  }));
+
+  assert.deepEqual(calls.map(([operation]) => operation), ["oauth.refresh.begin", "oauth.refresh.abort"]);
+  assert.equal(calls[1][1].reason, "unrecoverable");
+});
+
+test("reports cooling and quarantine as distinct retry outcomes", async () => {
+  const cooling = await handleQuotaResponse(responseFor(fixture.confirmed), {
+    operationID,
+    selection: fixture.selection,
+  }, { machine: async () => ({ outcome: "cooling", retry_after: 90 }) });
+  const quarantine = await handleQuotaResponse(responseFor(fixture.confirmed), {
+    operationID,
+    selection: fixture.selection,
+  }, { machine: async () => ({ outcome: "quarantined" }) });
+
+  assert.equal(cooling.status, 429);
+  assert.equal(cooling.headers.get("retry-after"), "90");
+  assert.deepEqual(await cooling.json(), { outcome: "cooling", retryable: true });
+  assert.equal(quarantine.status, 401);
+  assert.equal(quarantine.headers.get("retry-after"), null);
+  assert.deepEqual(await quarantine.json(), {
+    action: "acm login",
+    outcome: "quarantined",
+    retryable: false,
+  });
+});
+
+test("bounds diagnostics and excludes private inputs", () => {
+  const events = Array.from({ length: 300 }, (_, index) => ({
+    time: index,
+    component: "quota".repeat(20),
+    event: "transition".repeat(20),
+    outcome: "cooling",
+    retryable: true,
+    token: "secret-access",
+    refresh_token: "secret-refresh",
+    raw_payload: { prompt: "private prompt", response: "private response" },
+  }));
+  const result = boundedDiagnostics(events);
+  const serialized = JSON.stringify(result);
+
+  assert.equal(result.length, 256);
+  assert.ok(Buffer.byteLength(serialized) <= 65536);
+  assert.equal(serialized.includes("secret"), false);
+  assert.equal(serialized.includes("private"), false);
+  assert.equal(result[0].component.length, 32);
+});

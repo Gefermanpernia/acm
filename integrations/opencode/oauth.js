@@ -13,7 +13,8 @@ export async function refreshCredentials(selection, operationID, source, depende
     });
     const body = await response.json();
     if (!response.ok || typeof body.access_token !== "string" || typeof body.refresh_token !== "string" || typeof body.expires_in !== "number") {
-      const reason = ["invalid_grant", "revoked"].includes(body?.error) ? body.error : "transient";
+      const terminalReasons = ["invalid_grant", "revoked", "unrecoverable"];
+      const reason = terminalReasons.includes(body?.error) ? body.error : "transient";
       await machine("oauth.refresh.abort", { ...common, lease_id: lease.lease_id, reason });
       throw new Error("Claude OAuth refresh failed");
     }
