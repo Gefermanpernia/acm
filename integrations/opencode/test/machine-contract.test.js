@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -134,8 +134,34 @@ test("characterizes every adapter machine operation against the real binary", as
     outcome: "string", generation: "number", retry_after: "number",
   }), { code: "ERR_ASSERTION", message: /retry_after/ });
 
+  const stateBeforeLedgerReplay = await readFile(statePath, "utf8");
+  const statBeforeLedgerReplay = await stat(statePath);
+  let ledgerReplay;
+  await chmod(join(acmDir, "state"), 0o500);
+  try {
+    ledgerReplay = invoke(binary, env, "quota.exhaust", "a".repeat(64), {
+      profile: "alpha", generation: committed.response.generation, reset_at: resetAt,
+    });
+  } finally {
+    await chmod(join(acmDir, "state"), 0o700);
+  }
+  assertContract(ledgerReplay, "quota.exhaust", {
+    outcome: "string", generation: "number", reset_at: "number", replacement_available: "boolean",
+  });
+  assert.equal(ledgerReplay.response.generation, exhausted.response.generation);
+  assert.equal(await readFile(statePath, "utf8"), stateBeforeLedgerReplay);
+  assert.equal((await stat(statePath)).ino, statBeforeLedgerReplay.ino);
+  t.diagnostic(`ledger replay: stale_generation=${committed.response.generation} current_generation=${ledgerReplay.response.generation} state_write=false`);
+
   const replacement = invoke(binary, env, "credential.select", "a".repeat(64));
   assert.equal(replacement.response.profile, "beta");
+  const beforeStale = await readFile(statePath, "utf8");
+  const staleNonReplay = invoke(binary, env, "quota.exhaust", "a".repeat(64), {
+    profile: "beta", generation: exhausted.response.generation, reset_at: resetAt + 10,
+  });
+  assertError(staleNonReplay, "quota.exhaust", 75, "stale_generation", true);
+  assert.equal(await readFile(statePath, "utf8"), beforeStale);
+  t.diagnostic(`stale non-replay: exit=${staleNonReplay.status} code=${staleNonReplay.response.error.code} state_write=false`);
   const fullyExhausted = invoke(binary, env, "quota.exhaust", "a".repeat(64), {
     profile: "beta", generation: replacement.response.generation, reset_at: resetAt + 10,
   });

@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R15 `Doctor Legacy Visibility` (`feat/opencode-plugin-r15-doctor-visibility`)
-- Parent: `feat/opencode-plugin-r14-compat-doc-coherence` at `94cfd87` under `feature-branch-chain`
+- Current slice: R16 `Replay-Exception Contract` (`feat/opencode-plugin-r16-replay-contract`)
+- Parent: `feat/opencode-plugin-r15-doctor-visibility` at `2ce929e` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -668,3 +668,27 @@ None.
 
 ## Round-5 Remediation Chain Status
 66/69 tasks complete. R15 closes W3; R16 remains pending and was not started.
+
+## R16 Replay-Exception Contract
+- [x] 21.1 Added a document-coherence RED and a passing real-binary characterization of the existing ledger replay and stale non-replay paths.
+- [x] 21.2 Narrowed failover R7 S2 and documented the same-operation, same-profile replay exception without changing machine behavior.
+- [x] 21.3 Aligned replay terminology, proved current-generation/no-write behavior, reran regressions, and diff-read the slice with no out-of-scope behavior change.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 21.1 | `test/{contract-coherence,machine-contract}.test.js` | Contract + compiled binary | Focused baseline 3/3 | Exit 1; coherence failed only because spec lacked the replay exception, while the binary trace passed | Implemented by 21.2; focused 3/3 | Same-operation/profile replay and stale non-replay paths | No behavioral failure was invented |
+| 21.2 | Failover spec + `design.md` | Specification/design contract | 21.1 RED captured | Spec and design contradicted the ledger replay order | Focused 3/3 | Replay is accepted only for the bound operation/profile; stale non-replay is rejected | Exact exception sentence is shared |
+| 21.3 | Same tests/docs | Approval/refactor | Focused GREEN 3/3 | N/A: terminology-only refactor used the passing characterization | Final focused 3/3; regressions green | Replay returned generation 3 from stale 2 with no state write; non-replay exited 75 | Diff review found no out-of-scope behavior change |
+
+### R16 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused / RED / GREEN | Required isolated command: baseline 3/3; RED 2/3 with `/Stale non-replay transitions MUST be rejected/` absent while the real-binary case passed; GREEN 3/3; final 3/3 in `24035.302225ms` |
+| Runtime harness | Built `acm` under temporary HOME/ACM_DIR/TMPDIR/GOCACHE; matching ledger replay returned exit 0, stale generation 2 → current generation 3, unchanged bytes and inode while state-directory persistence was disabled; stale non-replay returned exit 75 `stale_generation` with unchanged state |
+| Full regressions | `go test -count=1 ./...` exit 0 in `46.117s`; exact warmed Node suite passed 29/29 in `18731.005069ms`; `gofmt -l .`, `go vet ./...`, and `git diff --check` exited 0 with no output |
+| Known environment flake | Later exact Node reruns hit the pre-existing 200 ms subprocess timeout (28/29, then 26/29 after cache priming); isolated `machine-process.test.js` passed 7/7 in `1097.962053ms`. No timeout change was attempted in R16. |
+| Diff / rollback | Complete slice: 77 additions + 12 deletions = **89/100 changed lines**. Revert only failover R7 S2, the replay paragraph in `design.md`, two Node contract additions, and Phase 21 metadata; `machine.go` and runtime behavior remain unchanged. |
+
+## Completed Round-5 Remediation Chain
+69/69 tasks complete. Planned findings C1(R5), W1, W2, W3, W5, and coverage warning W6 are closed; S3 closed with R13. Historical evidence warning W4 and suggestions S1, S2, S4, and S5 remain outside the approved R12–R16 scope. No merge-blocking or planned chain finding remains open.

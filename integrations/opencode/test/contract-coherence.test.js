@@ -6,8 +6,11 @@ import { createPlugin } from "../index.js";
 const packageURL = new URL("../package.json", import.meta.url);
 const readmeURL = new URL("../../../README.md", import.meta.url);
 const specURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/specs/acm-opencode-claude-auth/spec.md", import.meta.url);
+const failoverSpecURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/specs/acm-opencode-claude-failover/spec.md", import.meta.url);
+const designURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/design.md", import.meta.url);
 const adrURL = new URL("../../../docs/03-architecture/decisions/0001-use-ecosystem-plugin-compatibility.md", import.meta.url);
 const removedMatrix = /matriz fijada OpenCode 1\.18\.19 \/ SDK 1\.17\.12 \/ Claude CLI 2\.1\.236/;
+const replayException = "ACM MAY accept a stale submitted generation only for a same-operation, same-profile ledger replay; it MUST return the current generation and MUST return before state persistence.";
 
 function assertCompatibilityPolicy({ packageDocument, readme, spec, adr }) {
   assert.equal(packageDocument.dependencies["@opencode-ai/plugin"], "^1.18.18");
@@ -22,6 +25,13 @@ function assertCompatibilityPolicy({ packageDocument, readme, spec, adr }) {
   assert.match(spec, /Claude CLI detection MUST be diagnostic-only; missing or non-exact CLI evidence MUST NOT block plugin load/);
 }
 
+function assertReplayExceptionPolicy(failoverSpec, design) {
+  for (const document of [failoverSpec, design]) {
+    assert.match(document, /Stale non-replay transitions MUST be rejected\./);
+    assert.equal(document.includes(replayException), true);
+  }
+}
+
 async function loadWithClaudeEvidence(error, stdout) {
   const diagnostics = [];
   const plugin = createPlugin({
@@ -32,17 +42,20 @@ async function loadWithClaudeEvidence(error, stdout) {
   return { hooks: await plugin(), diagnostics };
 }
 
-test("README, ADR, auth R3, and package agree with non-exact CLI evidence", async () => {
-  const [packageText, readme, spec, adr] = await Promise.all([
+test("authoritative documents agree on compatibility and replay exceptions", async () => {
+  const [packageText, readme, spec, failoverSpec, design, adr] = await Promise.all([
     readFile(packageURL, "utf8"),
     readFile(readmeURL, "utf8"),
     readFile(specURL, "utf8"),
+    readFile(failoverSpecURL, "utf8"),
+    readFile(designURL, "utf8"),
     readFile(adrURL, "utf8"),
   ]);
   const packageDocument = JSON.parse(packageText);
   const { hooks, diagnostics } = await loadWithClaudeEvidence(null, "9.9.9\n");
 
   assertCompatibilityPolicy({ packageDocument, readme, spec, adr });
+  assertReplayExceptionPolicy(failoverSpec, design);
   assert.deepEqual(Object.keys(hooks).sort(), ["auth", "chat.headers"]);
   assert.equal(diagnostics[0].version, "9.9.9");
 });

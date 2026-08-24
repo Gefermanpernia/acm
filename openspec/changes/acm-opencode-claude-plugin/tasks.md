@@ -204,6 +204,6 @@ Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base
 - [x] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
 
 ## Phase 21: Replay-Exception Contract (R16; W5)
-- [ ] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
-- [ ] 21.2 **GREEN**: narrow failover R7 S2 to reject stale non-replay transitions while allowing only same-operation/profile ledger replays that return current generation before persistence; document this in `design.md`.
-- [ ] 21.3 **REFACTOR**: align terms across spec/design/tests and rerun the offline contract plus real-binary no-write replay proof.
+- [x] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
+- [x] 21.2 **GREEN**: narrow failover R7 S2 to reject stale non-replay transitions while allowing only same-operation/profile ledger replays that return current generation before persistence; document this in `design.md`.
+- [x] 21.3 **REFACTOR**: align terms across spec/design/tests and rerun the offline contract plus real-binary no-write replay proof.
