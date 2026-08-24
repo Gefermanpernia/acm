@@ -1,5 +1,509 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:3172e9d98c9731f1e9e30c39403e7cf3cbc506a2709d86459804457dca8ab9c9
+verdict: fail
+blockers: 1
+critical_findings: 1
+requirements: 8/11
+scenarios: 18/21
+test_command: go test -count=1 ./... && node --test "integrations/opencode/test/*.test.js"
+test_exit_code: 0
+test_output_hash: sha256:2bedbb7245b57778fda32c88dfe20afc79abb5b3918093025b072ecb42220fb7
+build_command: gofmt -l . && go vet ./... && git diff --check && sh -n install.sh
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+# Verification Report
+
+- **Change**: `acm-opencode-claude-plugin`
+- **Round**: 5 (independent final verification of the complete R7–R11 remediation chain)
+- **Tip**: `533555b` on `feat/opencode-plugin-r11-auth-error-containment`, 21 commits from `main`, worktree clean
+- **Mode**: Strict TDD, full spec-driven verification (proposal + 3 specs + design + tasks present)
+- **Artifact store**: hybrid (OpenSpec + Engram, project `acm`)
+- **Verdict**: **FAIL** — 1 CRITICAL
+- **Merge safety**: **NOT SAFE TO MERGE**
+
+## Executive Summary
+
+The R7–R11 chain is substantially real work, not cosmetic. Every command exits `0`; the Go
+suite and all 29 Node tests pass. I independently confirmed that **all three round-4 CRITICALs
+are genuinely closed**, and I proved four of the new guards are *live* by mutation. Most
+importantly, I traced the whole user-facing capability myself — real `install.sh` in an
+isolated `HOME`, real compiled `acm`, real `opencode enable`, real ESM load — and the default
+path works end to end. That is the first time in five rounds this has been true.
+
+The chain nevertheless fails, and it fails **in exactly the pattern this change keeps
+repeating**: a slice fixed its own finding and silently removed adjacent behavior that no test
+owned. Commit `dbd7115` (R9) closed C2 by moving backup creation under `if replaceUpstream`.
+The consequence is that the **primary opt-in path** — `acm opencode enable --confirm` on a
+configuration that has no upstream plugin, i.e. what every new user runs — now **mutates the
+user's OpenCode configuration while creating no backup and no manifest**, after which
+`acm opencode rollback --confirm` exits `2` and refuses to help. ACM performs an edit it
+cannot undo. No test covers that path: every lifecycle test either seeds the upstream plugin
+or asserts a *failure* branch, so the suite stayed green.
+
+This is the same defect class as round-4 C1 (a slice's fix breaking a neighbouring boundary),
+and the same class as C3 (behaviour changed without amending the specification). Task 14.3's
+REFACTOR evidence explicitly claims "diff review found no out-of-scope behavior change"; the
+diff contradicts it.
+
+Two further latent instances of the same class survive: `ACM_SHARE_DIR` is honoured by the
+installer but ignored by the lifecycle command, and `README.md` still advertises the pinned
+compatibility matrix that ADR 0001 deleted.
+
+## Completeness
+
+| Dimension | Status | Evidence |
+|---|---|---|
+| Tasks checked | 54/54 | `tasks.md`, `grep -c '^- \[x\]'` = 54, `'^- \[ \]'` = 0 |
+| Proposal | present | `proposal.md` |
+| Specs | 3 present | auth, failover, lifecycle |
+| Design | present | `design.md` |
+| Requirements | 11 total | 4 auth + 4 failover + 3 lifecycle (counted from spec files) |
+| Scenarios | 21 total | 7 auth + 8 failover + 6 lifecycle (counted from spec files) |
+
+## Command Evidence
+
+| Command | Exit | Result |
+|---|---|---|
+| `go test -count=1 ./...` | 0 | `ok github.com/Gefermanpernia/acm 15.622s` |
+| `node --test "integrations/opencode/test/*.test.js"` | 0 | tests 29, pass 29, fail 0 |
+| `gofmt -l .` | 0 | no output |
+| `go vet ./...` | 0 | clean |
+| `git diff --check` | 0 | clean |
+| `sh -n install.sh` | 0 | **syntax only — insufficient; see "Why `sh -n` is not evidence"** |
+| `go test -count=1 -cover ./...` | 0 | 45.1% of statements |
+
+Node v26.7.0. `bun` never invoked.
+
+### Why `sh -n` is not evidence
+
+Round-4 C1 shipped while `sh -n install.sh` was green. I re-proved that blindness directly.
+Removing `quota.js` from the installer's fetch list (mutation MUT-4 below) leaves
+`sh -n install.sh` at exit `0`, while the new `install.test.js` correctly fails. `sh -n`
+validates grammar and nothing else; it must never be cited as installer verification.
+
+## PRIMARY OBLIGATION — End-to-End Capability Trace (independent)
+
+Not a re-run of the implementer's tests. My own harness: `env -i`, temporary `HOME`, `TMPDIR`,
+offline fake `curl` serving repository bytes, the real compiled `acm` as the release artifact.
+
+```
+STEP 1  real `sh install.sh`, isolated                     install_exit=0
+STEP 2  staged at $HOME/.local/share/acm/opencode:
+        compat.js diagnostics.js index.js machine.js oauth.js package.json quota.js   (7/7)
+STEP 3  clean-process ESM load of the STAGED entry point
+        bare import: OK, default is function
+        factory invoke: OK, hooks = auth,chat.headers
+STEP 4  `acm opencode enable --confirm` (default discovery)  enable_exit=0
+        config: {"model":"anthropic/claude",
+                 "plugin":["file:///.../.local/share/acm/opencode/index.js"]}
+STEP 5  the path the config actually points at
+        ENABLED PLUGIN LOADS: hooks = auth,chat.headers
+host safety: real $HOME/.local/share/acm/opencode absent; sandbox removed
+```
+
+**All five links hold on the default path.** Round-3's "refuses to load" and round-4's "never
+gets installed" are both genuinely gone. This is verified capability, not unit greenness.
+
+### Cross-slice agreement (R7 contract × R8 assets)
+
+R7 removed the version matrix and its resolver; R8 reduced the installer to seven assets. They
+agree. The static import graph closes exactly over the shipped set:
+
+| Module | Imports |
+|---|---|
+| `index.js` | `./compat.js`, `./machine.js`, `./oauth.js`, `./quota.js` |
+| `quota.js` | `./diagnostics.js` |
+| `compat.js`, `machine.js` | node builtins only |
+| `oauth.js` | none |
+| `package.json` | declares `@opencode-ai/plugin ^1.18.18`; never imported at runtime |
+
+No asset the R7 contract needs is missing from the R8 fetch list. The C1 defect class is not
+reintroduced — and `install.test.js` now imports the *staged* entry point, so an omitted
+statically-imported module fails the suite (proved by MUT-4).
+
+## Guard Audit by Mutation
+
+Baseline SHA-256 recorded, mutation applied, suite run, file restored, checksums re-verified.
+
+| # | Mutation | Expected | Observed | Verdict |
+|---|---|---|---|---|
+| 1 | `quota.js:54` ignore `replacement_available` (always set `Retry-After`) | fail | exit 1 | guard **LIVE** |
+| 2 | `index.js` rethrow the raw credential error (undo W6) | fail | exit 1 | guard **LIVE** |
+| 3 | `machine.go` drop the parent-directory fsync (undo S1) | fail | exit 1, `sync order = [file]` | guard **LIVE** |
+| 4 | `install.sh` drop `quota.js` from the fetch list (C1 class) | fail | `sh -n`=0, `install.test.js` exit 1 | guard **LIVE** |
+
+Restoration verified byte-identical:
+
+```
+f2a34ef22c6ddd0595150630cfb3a3b19666a94c116d8f06ae382332faf9a128  integrations/opencode/quota.js
+9d55f94c691868d9246bc78eaf5c0a89a2190b904bd08fd5f748cc2f83f033e1  integrations/opencode/index.js
+5171b7734e71666d917d008f5dc1b9083d65e9565bf6d7fded466e84e8965a66  machine.go
+8d8621a1e8ee0e6daaaba667b53bc7778530372e82dbd687f999361d8b3c7b4a  install.sh
+```
+`git status --porcelain` empty after restoration.
+
+## Regression Guards Required by This Round
+
+| Guard | Result | Evidence |
+|---|---|---|
+| `Retry-After` omitted when `replacement_available === true` | ✅ HELD | `quota.js:54`; `quota-integration.test.js:118` asserts `null` against the real binary; MUT-1 proves the guard is live |
+| Cooling and quarantine remain distinct outcomes | ✅ HELD | cooling → `429 {outcome:cooling,retryable:true}`; quarantine → `401 {action:"acm login",outcome:quarantined,retryable:false}`; live at `quota-integration.test.js:90-98` |
+| Quarantine names `acm login` | ✅ HELD | `quota.js:51`; `machine-contract.test.js:231` asserts `/acm login/` in the binary's own message |
+| Exit taxonomy 0/2/69/74/75 unchanged | ✅ HELD | `2` invalid/unsupported/unknown_operation; `69` quarantined/no_available_profile; `74` persistence/state_unavailable; `75` state_busy/lease_busy/invalid_lease/stale_generation. Verified live per code. |
+| Responses and diagnostics secretless | ✅ HELD (scoped) | See below |
+
+### Secretlessness probe (live, real binary, hostile input)
+
+Injected `TOKEN-SECRET-AAA/BBB` and profile `MY-PRIVATE-ACCOUNT`, then submitted a
+`diagnostics.record` carrying a full profile path, a token, and a private identifier:
+
+```
+persisted state: clean TOKEN-SECRET-AAA · clean TOKEN-SECRET-BBB · clean leak-me · clean /profiles/
+diagnostics.status → {component:"unknown", event:"unknown", outcome:"unknown", retryable:true}
+state file mode: 600
+```
+
+Tokens, paths, and hostile identifiers are all collapsed or absent. Adapter error bodies expose
+only `code`/`outcome`/`retryable`/`action` — never a profile.
+
+**Scoped exception, by design, not a defect**: `credential.select` returns `profile` and
+`config_dir` in its success response. The adapter cannot read `.credentials.json` without them
+(`design.md` §Data Flow), and auth R1 constrains only tokens. The design's path prohibition is
+scoped to *diagnostics*, which is satisfied. W6's fix closed the one place this used to escape
+into OpenCode's error surface.
+
+## Spec Compliance Matrix
+
+| Req | Scenario | Status | Evidence |
+|---|---|---|---|
+| auth R1 | Selected profile supplies authentication | ✅ COMPLIANT | `quota-integration.test.js:54-65,108-124` (real binary) |
+| auth R1 | Non-ACM or unsupported host refused | ✅ COMPLIANT | `compat.test.js`; my probe: `darwin -> refused: unsupported platform` |
+| auth R2 | Normal expiry refresh succeeds | ✅ COMPLIANT | `machine-contract.test.js:112-117`; `quota-integration.test.js:108-117` |
+| auth R2 | Stale or failed refresh commit | ✅ COMPLIANT | `machine_test.go:113-129` (write/fsync failure, credential unchanged, no secret leak) |
+| auth R3 | Refresh credentials are revoked | ✅ COMPLIANT | `machine-contract.test.js:154-161` → 401 `acm login`; abort-quarantine in `machine_test.go` |
+| auth R3 | Claude CLI evidence is diagnostic only | ✅ COMPLIANT | **C3 closed.** `contract-coherence.test.js`; my probe: no CLI / `9.9.9` / garbage all load |
+| auth R4 | Doctor collects a failed refresh event | ✅ COMPLIANT | `machine-contract.test.js:210-217`; live secretless probe |
+| failover R5 | Confirmed exhaustion selects another profile | ✅ COMPLIANT | `quota-integration.test.js:108-124` (real binary rotation alpha→beta) |
+| failover R5 | Generic rate-limit-like response | ✅ COMPLIANT | `quota-integration.test.js:135-142` (401/429/529, object identity preserved) |
+| failover R6 | OpenCode retries after transition | ✅ COMPLIANT | `quota-integration.test.js:115,123`; one provider call per attempt; no timer/replay in adapter |
+| failover R7 | Multiple retries consume candidates | ✅ COMPLIANT | `machine-contract.test.js:137-145` |
+| failover R7 | Concurrent stale transition arrives | ⚠️ PARTIAL | rejected when not replayed; **accepted on replay** — see W5, re-proved live this round |
+| failover R8 | Cooling profile supplies retry metadata | ✅ COMPLIANT | `quota-integration.test.js:88-92` (`retry-after: 90`) |
+| failover R8 | Only quarantined profiles remain | ✅ COMPLIANT | `quota-integration.test.js:94-98` |
+| failover R8 | Cooling and quarantined mixed | ✅ COMPLIANT | `quota-integration.test.js:100-102` (`retry-after: 150`, cooling-only derivation) |
+| lifecycle R9 | Fresh ACM installation | ✅ COMPLIANT | **C1 closed.** `install.test.js`; my independent E2E STEP 1–3 |
+| lifecycle R9 | **User explicitly enables the experiment** | ❌ **FAILING** | **C1(R5)** — no test covers the successful plain opt-in; real behaviour leaves no restorable backup |
+| lifecycle R10 | Confirmed migration from upstream plugin | ✅ COMPLIANT | `opencode_lifecycle_test.go:74-104` (real binary); my scenario D |
+| lifecycle R10 | Plugin conflict is detected | ✅ COMPLIANT | **C2 closed.** My scenario C: exit 2, bytes preserved, no backup |
+| lifecycle R11 | Rollback after experimental use | ⚠️ PARTIAL | works for `--replace-upstream` (scenario D restored byte-identical); **unreachable** for plain enable |
+| lifecycle R11 | Backup is missing or invalid | ✅ COMPLIANT | `opencode_lifecycle_test.go:117-124` |
+
+**18/21 COMPLIANT · 2 PARTIAL · 1 FAILING** · Requirements fully satisfied: **8/11**.
+
+## Coherence (Design)
+
+| Decision | Followed? | Notes |
+|---|---|---|
+| Versioned stdin/stdout boundary, secrets never in argv/stderr/responses | ✅ Yes | Live probe clean |
+| Lease-spanning refresh, generation-checked commit | ✅ Yes | Real-binary begin/commit/abort |
+| `fsync` file **and parent directory** after rename | ✅ Yes | `machine.go:640-648`; MUT-3 proves the guard |
+| All 503 outcomes documented; retryable carry bounded `Retry-After: 1` | ✅ Yes | `design.md:33`; `machine-contract.test.js:194-208` |
+| One provider call per attempt; no replay/queue/stream continuation | ✅ Yes | `quota-integration.test.js:115`; no timers in `integrations/opencode/*.js` |
+| Compatibility governed by package range, CLI diagnostic-only | ✅ Yes | ADR 0001 + amended auth R3 |
+| Guided enable/rollback with checksummed backups | ❌ **No** | Backup only on `--replace-upstream`; see C1(R5) |
+
+## Strict TDD Sections
+
+### TDD Compliance
+
+| Check | Result | Details |
+|---|---|---|
+| TDD Evidence reported | ✅ | `apply-progress.md` has a TDD Cycle Evidence table for R7–R11 |
+| All tasks have tests | ✅ | 54/54 tasks map to a named test file |
+| RED confirmed (test files exist) | ✅ | every referenced file present |
+| GREEN confirmed (tests pass now) | ✅ | 29/29 Node, full Go suite |
+| Triangulation adequate | ✅ | e.g. R8 covers success + rejected-asset; R10 covers 6 machine outcomes |
+| Safety net for modified files | ⚠️ | reported for each slice, but **R9's claim is contradicted** — see W4 |
+
+**TDD compliance**: 5/6 checks passed.
+
+### Test Layer Distribution
+
+| Layer | Tests | Files | Tools |
+|---|---|---|---|
+| Unit (in-process) | Go `machine_test.go`, `main_test.go`; `compat/quota/diagnostics` JS | 5 | `go test`, `node --test` |
+| Integration (compiled binary / real process) | `machine-contract`, `quota-integration`, `machine-process`, `opencode_lifecycle_test.go` | 4 | spawned `acm` |
+| E2E (real installer process) | `install.test.js` | 1 | `sh install.sh` + offline fakes |
+| **Total Node** | **29** | **7** | |
+
+The real-binary and real-installer layers are the strongest part of this chain.
+
+### Changed File Coverage
+
+Go: **45.1% of statements** (whole package; no per-file coverage profile configured).
+Node: **no coverage tool configured** — analysis skipped, not a failure.
+
+### Assertion Quality
+
+No tautologies, no ghost loops, no render-only smoke assertions found.
+
+```
+compat 20 · contract-coherence 8 · install 12 · machine-contract 44
+machine-process 4 · quota-integration 30 · quota 19        (assert.* per file)
+```
+
+The round-2 negative control (`machine-contract.test.js:133-135`) still binds
+`message: /retry_after/`, so a bogus field name cannot pass silently.
+
+**Assertion quality**: ✅ All assertions verify real behavior.
+
+### Quality Metrics
+
+**Linter/formatter**: ✅ `gofmt -l .` clean. **Vet**: ✅ clean. **Whitespace**: ✅ `git diff --check` clean.
+
+---
+
+## Findings
+
+### CRITICAL
+
+#### C1(R5) — `enable --confirm` mutates the OpenCode config with no backup; `rollback` then refuses, leaving no undo path
+
+**Files**: `opencode_lifecycle.go:91-103` · **Introduced by**: `dbd7115` (R9) ·
+**Breaks**: lifecycle R10 requirement text, lifecycle R9 S2; makes lifecycle R11 S1 unreachable
+
+R9 closed C2 correctly, but it also moved backup creation under a condition:
+
+```go
+opencode_lifecycle.go:95    if replaceUpstream {
+opencode_lifecycle.go:96      rollback, _ := editOpenCode(original, pluginURL, false)
+opencode_lifecycle.go:97      record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
+opencode_lifecycle.go:98      if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
+...
+opencode_lifecycle.go:103   }
+opencode_lifecycle.go:104   if err = atomicWriteMachineFile(path, updated); err == nil {   // config IS written regardless
+```
+
+Before `dbd7115` those two writes were unconditional. Live proof, temporary config home,
+temporary plugin path, no host state touched:
+
+```
+--- before --- {"model":"anthropic/claude"}
+$ acm opencode enable --confirm
+✓ Configuración actualizada. Reinicia OpenCode para aplicar el cambio.
+enable_exit=0
+--- after  --- {"model":"anthropic/claude","plugin":["file:///.../opencode/index.js"]}
+--- files in config home --- opencode.json          <<< no .acm-opencode-backup.json, no .acm-backup
+
+$ acm opencode rollback --confirm
+acm: no existe un respaldo válido
+rollback_exit=2
+--- config after rollback --- {"model":"anthropic/claude","plugin":["file:///.../index.js"]}
+```
+
+**Impact.** This is the path a new user takes: install ACM, opt in, no upstream plugin present.
+ACM writes to the user's `opencode.json`, reports success, and then its own documented rollback
+command exits `2` and leaves the edit in place. The only recovery is hand-editing JSON — the
+exact remedy ADR 0001 criticises as unacceptable. `README.md:80` tells the user
+`acm opencode rollback --confirm` is how to "volver a la configuración respaldada"; for this
+path no backup was ever taken.
+
+**Spec position.** Lifecycle R10's normative text is unconditional: *"Migration MUST require
+explicit confirmation, **create a restorable backup of the OpenCode configuration**, and enforce
+mutual exclusivity."* Enabling writes the configuration through the same edit/validate/atomic
+machinery and the same `.acm-opencode-backup.json` manifest, so it is a configuration migration
+in this system's own vocabulary. The behaviour was changed without amending R10 or R11 —
+violating the same-slice rule R7 had just written into ADR 0001 and task 12.3.
+
+**Why the suite stayed green.** Every lifecycle test either seeds the upstream plugin or asserts
+a *failure* branch. There is **no test of a successful plain `enable --confirm`**:
+
+```
+opencode_lifecycle_test.go:32   {"plugin":["upstream-json"]}        → ambiguous origins, fails
+opencode_lifecycle_test.go:46   same home, validateOpenCode stubbed to fail → restores, fails
+opencode_lifecycle_test.go:53   upstream present                    → conflict, fails
+opencode_lifecycle_test.go:74   upstream present (real binary)      → conflict, fails
+opencode_lifecycle_test.go:107  upstream present                    → requires --replace-upstream
+```
+
+**Required fix (choose one, then test it).** Either restore unconditional backup + manifest
+creation for any config-mutating `enable`, or amend lifecycle R10/R11 to state that a
+non-migration enable takes no backup **and** give the user a supported `disable`/`rollback`
+path. In both cases add a test that performs a *successful* plain `enable --confirm` and
+asserts the resulting undo contract.
+
+### WARNING
+
+- **W1 — `ACM_SHARE_DIR` is honoured by the installer and ignored by the lifecycle command.**
+  `install.sh:19` resolves `SHARE_DIR="${ACM_SHARE_DIR:-$HOME/.local/share/acm}"`, but
+  `opencode_lifecycle.go:55-58` falls back to a hardcoded `$HOME/.local/share/acm/opencode/index.js`
+  and never reads `ACM_SHARE_DIR`. Proved live: installing with `ACM_SHARE_DIR` set succeeds,
+  then `acm opencode enable --confirm` fails with *"el adaptador OpenCode de ACM no está
+  instalado"*, exit `2`. This is the round-4 C1 defect class (two slices disagreeing about where
+  assets live) still latent, saved only by the default path. The undocumented
+  `ACM_OPENCODE_PLUGIN_PATH` is the sole escape. Either honour `ACM_SHARE_DIR` in
+  `enableOpenCode` or drop it from `install.sh`.
+
+- **W2 — `README.md:63` still advertises the compatibility matrix ADR 0001 deleted.**
+  > "Solo admite Linux, perfiles ACM y **la matriz fijada OpenCode 1.18.19 / SDK 1.17.12 /
+  > Claude CLI 2.1.236**."
+
+  R6 removed that matrix, R7 amended auth R3 to make CLI detection diagnostic-only, and my probe
+  confirms the plugin loads against no CLI, `9.9.9`, and garbage output. R9 edited `README.md`
+  in this same chain and left line 63 untouched. This is C3 surviving at the user-facing
+  documentation boundary — the same "authoritative artefact not amended in the deciding slice"
+  failure the ADR forbids.
+
+- **W3 — `acm doctor` silently lost the state directory line and the profile listing.**
+  `git show main:main.go` ends `cmdDoctor` with `fmt.Println("estado : " + acmDir)` … `return cmdLs()`;
+  at HEAD both are gone (`grep -c cmdLs` inside `cmdDoctor` = 0, `'estado : '` = 0). Removed by
+  `249633f` (R4a) while adding diagnostics aggregates. No requirement authorises the removal —
+  auth R4 constrains what doctor MUST NOT *contain*, not that it must stop listing profiles.
+  `acm ls` still exists, so this is recoverable, but it is out-of-scope behaviour deleted during a
+  refactor and it went unflagged through four verification rounds.
+
+- **W4 — Task 14.3's REFACTOR evidence is contradicted by the diff.**
+  `apply-progress.md` (R9, task 14.3) states *"diff review found no out-of-scope behavior
+  change"*. The diff shows `enableOpenCode` losing unconditional backup creation, which changes
+  fresh-enable behaviour. This inaccurate self-assessment is the mechanism by which C1(R5)
+  reached this round. Task honesty finding, not a code finding.
+
+- **W5 — failover R7 S2 remains PARTIAL: a replayed `quota.exhaust` still accepts a stale
+  generation.** Re-proved live against the compiled binary this round:
+  ```
+  first exhaust  (gen 1) -> exit 0, ok:true, generation:2
+  REPLAY same op+profile, STALE gen 1 -> exit 0, ok:true, generation:2   <<< accepted
+  ```
+  `machine.go:451` precedes the generation check at `machine.go:459-460`. It is **non-corrupting**
+  — it returns before `saveMachineState` and echoes the *current* generation — but it contradicts
+  failover R7's literal "MUST reject stale generations" and is still undocumented in `design.md`.
+  Round-4 W4; deliberately not planned for remediation. See the W4 note below.
+
+- **W6 — No lifecycle test covers a successful plain `enable --confirm`.** Enumerated under
+  C1(R5). This coverage hole is what allowed a config-mutating command to lose its undo path
+  without a single test turning red, and it will allow the next such change too.
+
+### SUGGESTION
+
+- **S1 — `Retry-After` is unbounded.** `quota.js:32-40` accepts any 10–13-digit epoch strictly in
+  the future from the provider-controlled `anthropic-ratelimit-unified-reset` header, and
+  `quota.js:42-45` converts it to a raw delta. The suite's own diagnostic shows the consequence:
+  `real binary no-replacement mapping: ... "retry-after":"212490117"` — roughly 6.7 years. A
+  malformed or hostile upstream value can stall OpenCode indefinitely. Clamp to a sane maximum
+  (the security baseline's "explicit limits at the boundary").
+
+- **S2 — `install.test.js:11-14` hardcodes `runtimeAssets`** rather than deriving it from the
+  files actually shipped in `integrations/opencode/`. The real protection is the staged
+  `import()` at line 116, which only catches *statically* imported modules. A future
+  lazily-imported or data asset dropped from `install.sh` would still slip through.
+
+- **S3 — the installer harness stops one link short of the capability.** `install.test.js`
+  proves the staged bundle loads, but never runs `acm opencode enable` against it. Extending it
+  by that one step would have caught W1 automatically.
+
+- **S4 — `cmdLogin` clears the cooldown on a path where no login occurred.** `main.go` now has
+  `defer os.Remove(coolFile(t, name))` placed *before* the early `if recoveryExit != 0 { return
+  recoveryExit }`, so a profile is marked available again even when `machineLoginState` aborted
+  and the interactive login never ran. Previously the removal happened only after the login
+  attempt.
+
+- **S5 — coverage signal is thin.** Go statement coverage is 45.1% package-wide with no per-file
+  profile; Node has no coverage configuration. Not blocking, but the chain's real assurance comes
+  from the real-binary and real-installer layers, not from coverage.
+
+---
+
+## Per-Finding Closure Verdicts (round 4 → round 5)
+
+| Round-4 item | Claimed by | Verdict | Independent evidence |
+|---|---|---|---|
+| **C1** installer fetches deleted `compatibility.json` | R8 `067a5c6` | ✅ **CLOSED** | My own isolated `install.sh` run stages 7/7 assets and the staged entry point loads; MUT-4 proves the new guard is live |
+| **C2** plugin conflict does not stop | R9 `dbd7115` | ✅ **CLOSED** | Live: both-present + `--confirm` → exit 2, bytes preserved, no backup; `--replace-upstream` migrates and rollback restores byte-identical |
+| **C3** compatibility spec invalidated by ADR 0001 | R7 `4a1101a` | ✅ **CLOSED** | auth R3 amended; probe shows load with no CLI / `9.9.9` / garbage, `darwin` still refused. *Residual at the README boundary → W2* |
+| **W1** cooling with `replacement_available:false` unmapped | R10 `9809e02` | ✅ **CLOSED** | `quota-integration.test.js:126-133` real binary; MUT-1 proves the guard |
+| **W2** `oauth.refresh.begin` quarantine uncovered | R10 `9809e02` | ✅ **CLOSED** | `machine-contract.test.js:154-161`, real binary → 401 `acm login` |
+| **W3** 503 shape undocumented and unexercised | R10 `9809e02` | ✅ **CLOSED** | `design.md:33` enumerates every 503 class; retryable carry `Retry-After: 1`, asserted at `machine-contract.test.js:194-208` |
+| **W6** ENOENT leaks a filesystem path | R11 `533555b` | ✅ **CLOSED** | `index.js:9-11,32-34`; `quota-integration.test.js:43-52` asserts neither temp path nor profile id appears; MUT-2 proves the guard |
+| **W7** four machine codes with zero coverage | R10 `9809e02` | ✅ **CLOSED** | `invalid_lease`, `unknown_operation`, `invalid_operation`, `state_busy` all asserted against the real binary |
+| **S1** `fsync` misses the directory entry | R10 `9809e02` | ✅ **CLOSED** | `machine.go:640-648`; `TestMachineAtomicWriteSyncsParentAfterRename` asserts order `[file, directory]`; MUT-3 proves the guard |
+| **W4** stale generation accepted on replay | *not planned* | ⚠️ **OPEN (accepted)** | Re-proved live; see residual-risk statement below |
+| **W5** → escalated to C2 in round 4 | R9 | ✅ **CLOSED** | as C2 |
+
+**Nine of nine remediated findings are genuinely closed**, each verified by evidence I produced
+myself rather than by re-reading the implementer's claims.
+
+### W4 residual-risk statement (deliberately unplanned)
+
+W4 was not scheduled for remediation. I am not silently accepting it; here is the explicit
+position. A replayed `quota.exhaust` (same `operation_id` + same profile already in the ledger)
+returns success even when the submitted generation is stale, because the ledger replay check at
+`machine.go:451` runs before the generation check at `machine.go:459`.
+
+**Why the omission is still defensible**: the replay branch returns *before* `saveMachineState`,
+so newer state is never overwritten; the response echoes the **current** generation, so the
+adapter cannot act on a stale value; and the ledger key already binds the logical operation, so
+only a genuine duplicate of the *same* transition can reach it. Non-replayed stale transitions
+are still correctly rejected with exit `75` `stale_generation`. It is idempotency, not
+corruption.
+
+**Residual risk**: (1) failover R7 S2 cannot be marked fully compliant while the specification
+says "MUST reject stale generations" and the code accepts one class of them — the contradiction
+will resurface in every future round; (2) the behaviour is undocumented in `design.md`, so a
+future refactor may "fix" it and break idempotency, or extend the replay window and turn it into
+a real staleness hole. **Recommendation**: document the idempotency exception in `design.md`
+§Interfaces and narrow failover R7's wording in the same slice, per the ADR 0001 rule. Cost is
+two sentences; leaving it costs a permanent PARTIAL.
+
+## Isolation and Safety Compliance
+
+Every execution used temporary `HOME`, `ACM_DIR`, `ACM_OPENCODE_CONFIG_HOME`,
+`ACM_OPENCODE_PLUGIN_PATH`, `ACM_BIN_DIR`, `ACM_SHARE_DIR`, and `TMPDIR` under `mktemp -d`,
+with `env -i` and offline fake `curl`/`acm`. No real credential, profile, alias file, or
+OpenCode configuration was read, written, or deleted; `~/.config/opencode/` and `~/.acm/` were
+never touched, and `$HOME/.local/share/acm/opencode` was confirmed absent after the E2E run.
+All sandboxes were removed. All four mutations were restored and checksum-verified byte-identical,
+with `git status --porcelain` empty. Nothing was fixed, refactored, committed, pushed, or opened
+as a PR. This report is the only file written.
+
+## Required Before This Change Can Merge
+
+1. **C1(R5)** — restore a restorable backup for every config-mutating `enable`, **or** amend
+   lifecycle R10/R11 and ship a supported undo path. Then add the missing test: a *successful*
+   plain `enable --confirm` on a config without the upstream plugin, asserting the undo contract.
+2. **W1** — make `enableOpenCode` honour `ACM_SHARE_DIR`, or remove it from `install.sh`; extend
+   `install.test.js` to run `acm opencode enable` against the staged bundle (also closes S3).
+3. **W2** — correct `README.md:63` to match ADR 0001 and the amended auth R3.
+4. **W3** — restore doctor's profile listing and state line, or add a requirement authorising the
+   reduced output.
+5. **W5** — document the replay idempotency exception in `design.md` and align failover R7's
+   wording in the same slice.
+
+## Final Verdict
+
+**FAIL** — 1 CRITICAL, 6 WARNING, 5 SUGGESTION. **Not safe to merge.**
+
+Say it plainly: the R7–R11 chain closed all nine round-4 findings, and I proved each closure
+independently rather than trusting the report. The engineering is real and the new real-binary
+and real-installer harnesses are the strongest guards this change has ever had. But the chain
+also shipped a fresh instance of its own signature defect — R9's fix removed the backup from the
+one enable path no test exercises, so ACM now edits a user's OpenCode configuration and cannot
+undo it. A green suite did not see it, and would not have.
+
+*No file was fixed. All mutated files restored byte-identical and checksum-verified. Read-only
+apart from this report.*
+
+---
+
+# Appendix: Round 4 (superseded, preserved for history)
+
+> Preserved verbatim from the round-4 report at tip `06b9ab6`. Its YAML envelope is reproduced
+> as a plain text block so that this document has exactly one machine-readable envelope.
+
+```text
+schema: gentle-ai.verify-result/v1
 evidence_revision: sha256:253438698519d414f9f2626e8f3a2a3f29b104fd2e0623c42a6a3a3d2cec8576
 verdict: fail
 blockers: 3
@@ -14,477 +518,75 @@ build_exit_code: 0
 build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
-# Verification Report
+**Change**: `acm-opencode-claude-plugin` · **Round**: 4 · **Tip**: `06b9ab6` on
+`feat/opencode-plugin-r6-compat-policy`, 15 commits from `main` · **Verdict**: FAIL — 3 CRITICAL.
 
-- **Change**: `acm-opencode-claude-plugin`
-- **Round**: 4 (independent final verification)
-- **Tip**: `06b9ab6` on `feat/opencode-plugin-r6-compat-policy`, 15 commits from `main`
-- **Mode**: full spec-driven verification (proposal + 3 specs + design + tasks present)
-- **Artifact store**: hybrid (OpenSpec + Engram, project `acm`)
-- **Verdict**: **FAIL** — 3 CRITICAL
+## Round-4 Executive Summary
 
-## Executive Summary
+Every mandated command exited `0`. All 24 Node tests and the entire Go suite passed, with and
+without `-race`. Round-3 C1 was closed: the production entry point loaded on the installed
+runtime. The change nevertheless failed in the same shape as rounds 1–3: a documented state that
+no test exercised, while the suite stayed fully green. The defect was introduced by the round-3
+fix itself — `06b9ab6` deleted `integrations/opencode/compatibility.json` but left
+`install.sh:66` fetching it, so under `set -eu` with `curl -fsSL` the installer aborted on a 404
+and never bundled the plugin. A second CRITICAL was a spec scenario whose implementation and test
+asserted the opposite of the specification; a third was a specification the accepted ADR silently
+invalidated without amendment.
 
-Every mandated command exits `0`. All 24 Node tests and the entire Go suite pass, with and
-without `-race`. All 15 commits build and pass their own tests. Round-3 C1 is **closed**: the
-production entry point now loads on the installed runtime.
-
-The change nevertheless fails, and it fails **in the same shape as rounds 1, 2, and 3**: a
-documented state that no test exercises, while the suite stays fully green. This round the
-defect was introduced *by the round-3 fix itself*. Commit `06b9ab6` deleted
-`integrations/opencode/compatibility.json` but left `install.sh:66` fetching it. Under
-`set -eu` with `curl -fsSL`, the installer aborts on a 404 and never bundles the plugin — so
-the capability that round 3 restored at the *load* boundary is now unreachable at the
-*distribution* boundary. `sh -n install.sh` cannot see it, and no test touches `install.sh`.
-
-A second CRITICAL is a spec scenario whose implementation and test assert the **opposite** of
-the specification, and a third is a specification that the accepted ADR silently invalidated
-without amending the spec file.
-
-## Completeness
-
-| Dimension | Status | Evidence |
-|---|---|---|
-| Tasks checked | 30/30 | `tasks.md` phases 1–11, all `[x]` |
-| Proposal | present | `proposal.md` |
-| Specs | 3 present | auth, failover, lifecycle |
-| Design | present | `design.md` |
-| Requirements | 11 total | 4 auth + 4 failover + 3 lifecycle |
-| Scenarios | 21 total | 7 auth + 8 failover + 6 lifecycle |
-
-## Command Evidence
-
-| Command | Exit | Result |
-|---|---|---|
-| `gofmt -l .` | 0 | no output |
-| `go vet ./...` | 0 | clean |
-| `go test -count=1 ./...` | 0 | `ok github.com/Gefermanpernia/acm 3.261s` |
-| `go test -count=1 -race ./...` | 0 | `ok github.com/Gefermanpernia/acm 5.222s` |
-| `ACM_OPENCODE_CONFIG_HOME=$(mktemp -d) go test -count=1 -run TestOpenCodeMigration .` | 0 | `ok ... 0.050s`; temp home left empty |
-| `node --test integrations/opencode/test/*.test.js` | 0 | tests 24, pass 24, fail 0 |
-| `sh -n install.sh` | 0 | syntax only — see C1 |
-| Entry-point load (bare import) | 0 | `import_ok typeof default = function` |
-| Entry-point load (invoke factory) | 0 | `hooks = auth,chat.headers`, `auth.provider = anthropic` |
-| Per-commit build × 15 | 0 | all 15 `build=0` |
-| Per-commit `go test` × 15 | 0 | all 15 `test=0` |
-| Per-commit `node --test` × 12 | 0 | commits 4–15; commits 1–3 predate the JS suite |
-
-Node v26.7.0. `bun` never invoked. `gentle-ai review` and `gentle-ai sdd-attempt` never invoked.
-
-### Round-3 C1 closure (verified independently)
-
-```
-$ env -i PATH=/usr/bin:/bin HOME=/tmp node -e 'import(".../integrations/opencode/index.js")...'
-import_ok typeof default = function
-$ ... await m.default()
-ACM diagnostics: record_failed
-invoke_ok hooks = auth,chat.headers
-auth.provider = anthropic
-```
-
-`compatibility.json` and `scripts/check-compat.js` are absent from the tree; `resolveVersions`
-has no residual reference in any source file; `package.json` declares
-`"@opencode-ai/plugin": "^1.18.18"`. ADR `docs/03-architecture/decisions/0001-...md` records the
-accepted risk. **C1 closed.**
-
-## PRIMARY OBLIGATION — Coverage-State Matrix
-
-Legend: **Real-binary test** = a test that spawns the compiled `acm` and exercises this state.
-**Live** = verified by my own probe against a freshly built binary in `/tmp` (deleted after).
-
-### Machine dispatcher branches (`machine.go`)
-
-| # | State | Specified in | Real-binary test | Live probe | Verdict |
-|---|---|---|---|---|---|
-| 1 | `credential.select` success | auth R1 S1 | yes — `machine-contract:75-79` | ok | COVERED |
-| 2 | `credential.select` cooling (`no_available_profile`, exit 75, `reset_at`) | failover R8 S1 | yes — `machine-contract:144-150`, `quota-integration:53-57` | ok | COVERED |
-| 3 | `credential.select` all-quarantined (exit 69) | failover R8 S2 | yes — `machine-contract:152-160` | ok | COVERED |
-| 4 | `credential.select` mixed (reset from cooling only) | failover R8 S3 | yes — `machine-contract:175-179` | ok | COVERED |
-| 5 | `credential.select` no-unattempted (exit 69, non-retryable) | design (implicit) | shape only — `machine-contract:80-81`; never mapped | ok | **UNEXERCISED (mapping)** — W3 |
-| 6 | `credential.select` `invalid_profile_path` | design §Interfaces | `machine_test.go:228` (in-process) | — | COVERED (unit) |
-| 7 | `oauth.refresh.begin` success | auth R2 S1 | yes — `machine-contract:83-89` | ok | COVERED |
-| 8 | `oauth.refresh.begin` `stale_generation` | failover R7 S2 | yes — `machine-contract:181-183` | ok | COVERED |
-| 9 | `oauth.refresh.begin` `lease_busy` | design §Data Flow | `machine_test.go:81` (in-process) | — | COVERED (unit) |
-| 10 | **`oauth.refresh.begin` `credential_quarantined`** (`machine.go:344-347`) | auth R3 S1 | **none** | exit 69, correct | **UNEXERCISED** — W2 |
-| 11 | `oauth.refresh.commit` success | auth R2 S1 | yes — `machine-contract:100-105` | ok | COVERED |
-| 12 | `oauth.refresh.commit` stale/expired/persistence failure | auth R2 S2 | `machine_test.go:97,133,167` (in-process) | — | COVERED (unit) |
-| 13 | **`oauth.refresh.commit` / `.abort` `invalid_lease`** (`machine.go:372,421`) | design §Interfaces | **none** | exit 75, retryable | **UNEXERCISED** — W7 |
-| 14 | `oauth.refresh.abort` → `aborted` | auth R3 S1 | yes — `machine-contract:91-95` | ok | COVERED |
-| 15 | `oauth.refresh.abort` → `quarantined` (terminal reasons) | auth R3 S1 | no — `machine_test.go:149-153` in-process only | quarantined, state updated | COVERED (unit); real-binary gap |
-| 16 | `quota.exhaust` cooling, `replacement_available: true` | design §Interfaces | yes — `machine-contract:111-120`, `quota-integration:73-85` | ok | COVERED |
-| 17 | **`quota.exhaust` cooling, `replacement_available: false`** | design §Interfaces | shape only — `machine-contract:127-133`; never mapped end-to-end | 429 + `Retry-After: 3600` | **UNEXERCISED (mapping)** — W1 |
-| 18 | `quota.exhaust` `stale_generation` (non-replayed) | failover R7 S2 | `machine_test.go:406` (in-process) | exit 75 | COVERED (unit) |
-| 19 | **`quota.exhaust` replayed with a stale generation** | failover R7 S2 | `machine_test.go:368-370` **asserts acceptance** | exit 0, `ok:true` | **CONTRADICTS SPEC** — W4 |
-| 20 | **`quota.exhaust` `unknown_operation`** (`machine.go:447`) | design §Interfaces | **none** | exit 2, non-retryable | **UNEXERCISED** — W7 |
-| 21 | `diagnostics.record` valid + rejected | auth R4 | yes — `machine-contract:135-141` | ok | COVERED |
-| 22 | `diagnostics.status` valid + `invalid_request` + `state_unavailable` | auth R4 | yes — `machine-contract:137-141,180,186-187` | ok | COVERED |
-| 23 | **`state_busy`** (`machine.go:201,318`) | design §Interfaces (exit 75) | **none** | exit 75, retryable | **UNEXERCISED** — W7 |
-| 24 | **`invalid_operation`, Go dispatcher `default:`** (`machine.go:106`) | design §Interfaces | **none** (the JS test hits `machine.js`'s own allowlist, never the binary) | exit 2 | **UNEXERCISED** — W7 |
-| 25 | `unsupported_version` (`v2`) | design §Interfaces | `machine_test.go:207` (in-process) | exit 2 | COVERED (unit) |
-| 26 | 64 KiB stdin overflow | design §Threat Matrix | `machine_test.go:330` | exit 2 | COVERED |
-| 27 | **`output_too_large`** (`machine.go:111-115`) | design §Interfaces | **none** | **unreachable**: full 256-event ring truncates to 64 → 6,658 B | **DEAD BRANCH** — S4 |
-| 28 | Login clears only its own quarantine | auth R3 S1 | yes — `machine-contract:162-173` | ok | COVERED |
-
-### Adapter response mapping (`quota.js:mapMachineResponse`)
-
-Complete surface, driven with envelopes captured verbatim from the real binary:
-
-| Machine outcome | HTTP | `Retry-After` | Body | In `design.md`? | Real-binary test |
-|---|---|---|---|---|---|
-| cooling, replacement available | 429 | *absent* | `{outcome:cooling,retryable:true}` | yes | yes |
-| cooling, no replacement | 429 | `3600` | `{outcome:cooling,retryable:true}` | yes | **no** (W1) |
-| `no_available_profile` cooling (select) | 429 | `90` | `{outcome:cooling,retryable:true}` | yes | yes |
-| `credential_quarantined` | 401 | *absent* | `{action:"acm login",outcome:quarantined,retryable:false}` | yes | yes |
-| `no_available_profile` non-retryable | **503** | absent | `{code,outcome:unavailable,retryable:false}` | **no** | **no** (W3) |
-| `state_busy` (exit 75, **retryable**) | **503** | absent | `{code,outcome:unavailable,retryable:true}` | **no** | **no** (W3/W7) |
-| `state_unavailable` (exit 74) | **503** | absent | `{code,outcome:unavailable,retryable:false}` | **no** | yes — `quota-integration:100-107` |
-| `unknown_operation` (exit 2) | **503** | absent | `{code,outcome:unavailable,retryable:false}` | **no** | **no** (W3/W7) |
-| `invalid_lease` (exit 75, **retryable**) | **503** | absent | `{code,outcome:unavailable,retryable:true}` | **no** | **no** (W3/W7) |
-| unconfirmed 401 / 429 / 529 | passthrough | unchanged | unchanged object identity | yes | yes — `quota-integration:91-98` |
-
-Four codes collapse into one undocumented 503 shape. Two of them (`state_busy`,
-`invalid_lease`) are **retryable at the machine layer** but surface with no `Retry-After`,
-losing the retry signal at the HTTP layer OpenCode's `SessionRetry` actually reads.
-
-## Spec Compliance Matrix
-
-| Req | Scenario | Status | Evidence |
-|---|---|---|---|
-| auth R1 | Selected profile supplies authentication | PASS | `quota-integration:43-50,73-88` (real binary) |
-| auth R1 | Non-ACM or unsupported host refused | PASS | `compat.test.js:23-27` |
-| auth R2 | Normal expiry refresh succeeds | PASS | `machine-contract:97-105`; `quota-integration:69-82` |
-| auth R2 | Stale or failed refresh commit | PASS | `machine_test.go:97-131` |
-| auth R3 | Refresh credentials are revoked | PASS | `machine_test.go:149-165`; adapter `quota.test.js:108-122` |
-| auth R3 | **Unsupported version attempts a sensitive operation** | **FAIL** | **C3** — matrix removed by ADR; spec never amended; no gate, no test |
-| auth R4 | Doctor collects a failed refresh event | PASS | `machine_test.go:259`; `main_test.go:12`; live `acm doctor` |
-| failover R5 | Confirmed exhaustion selects another profile | PASS | `quota-integration:73-88` (real binary) |
-| failover R5 | Generic rate-limit-like response | PASS | `quota-integration:91-98` (401/429/529, identity preserved) |
-| failover R6 | OpenCode retries after transition | PASS | `quota-integration:86-88`; no timer/replay/queue in adapter |
-| failover R7 | Multiple retries consume candidates | PASS | `machine-contract:125-133`; `machine_test.go:239` |
-| failover R7 | Concurrent stale transition arrives | **PARTIAL** | rejected when not replayed; **accepted on replay** — W4 |
-| failover R8 | Cooling profile supplies retry metadata | PASS | `machine-contract:144-150`; `quota-integration:53-57` |
-| failover R8 | Only quarantined profiles remain | PASS | `machine-contract:152-160`; `quota-integration:59-63` |
-| failover R8 | Cooling and quarantined mixed | PASS | `machine-contract:175-179`; `quota-integration:65-67` |
-| lifecycle R9 | **Fresh ACM installation** | **FAIL** | **C1** — installer aborts; plugin never bundled |
-| lifecycle R9 | User explicitly enables the experiment | PASS | `opencode_lifecycle_test.go:64-73` (blocked in the field by C1) |
-| lifecycle R10 | Confirmed migration from upstream plugin | PASS | `opencode_lifecycle_test.go:64-73` |
-| lifecycle R10 | **Plugin conflict is detected** | **FAIL** | **C2** — proceeds silently, exit 0; test asserts the opposite |
-| lifecycle R11 | Rollback after experimental use | PASS | `opencode_lifecycle_test.go:71-73` |
-| lifecycle R11 | Backup is missing or invalid | PASS | `opencode_lifecycle_test.go:58-61,74-78` |
-
-**17/21 PASS · 1 PARTIAL · 3 FAIL** · Requirements fully satisfied: **8/11**.
-
-## Guard Audit by Mutation
-
-Baseline SHA-256 recorded, mutations applied, files restored and re-verified byte-identical.
-
-| # | Mutation | Expected | Observed | Verdict |
-|---|---|---|---|---|
-| 1 | `machine.go:556` `replacement_available` → `replacement_ready` | guard fails | **fail 1** — `+ 'replacement_ready' / - 'replacement_available'` | guard is LIVE |
-| 2a | negative control field → `bogus_field`, `message: /retry_after/` **kept** | guard fails | **fail 1** — `message: /retry_after/` unmatched | strengthening WORKS |
-| 2b | same bogus field, regex binding **removed** | guard passes (round-2 weakness) | **pass 1** | weakness was real; task 10.3 closes it |
-
-Restoration verified:
-```
-526a725ba0eb8bd56300513e3f10ce8aea027c2513c686adbbb08d4d36c6643f  machine.go
-7866a0f0ecde3719901079039283a3e322fbe7f255e244d6803f23088a4d2325  machine-contract.test.js
-```
-identical to baseline; `git diff --stat HEAD` empty.
-
-## Additional Verification
-
-**Fixture fidelity** — no synthetic fixture asserts a field the real binary does not emit.
-`quota.json.selection` is a strict subset of the real `credential.select` keys.
-`machine-stub.js` emits an extra `args` field, but it is a Node stub for
-`machine-process.test.js` boundary tests and is never claimed as binary output. One weakness:
-`quota.test.js` stubs omit `replacement_available`, so the `Retry-After` expectation silently
-rests on `undefined !== true` (S5).
-
-**Ownership boundaries** — clean. No `setTimeout`/`setInterval`/`setImmediate`/sleep/delay
-anywhere in `integrations/opencode/*.js`. Exactly one provider call per attempt
-(`index.js:64`), plus the OAuth token endpoint (`oauth.js:10`). No queue, replay, stream
-resumption, or agent continuation. The only two `while` loops are a bounded array shrink
-(`diagnostics.js:21`) and the 4 KiB-capped evidence reader (`quota.js:14`).
-
-**Secret safety** — with tokens `TOKEN-SECRET-AAA/BBB` in a live profile: 0 hits in
-`acm doctor` stdout, 0 in stderr, 0 in the persisted state file. State file `0600`, credential
-file `0600`. `machine.go:266-275` allowlists diagnostic component/event/outcome to fixed sets,
-collapsing anything else to `"unknown"` — verified live: a request carrying a full profile
-path, a token, and `private-identifier` persisted as `{component:"unknown", event:"unknown",
-outcome:"unknown"}`. Machine subprocess output is never exposed
-(`machine-process.test.js:24-33`). **One exception: W6.**
-
-**Bounded state** — verified live against the real binary:
-
-| Bound | Injected | Persisted | Cap |
-|---|---|---|---|
-| Diagnostics ring, count | 900 | **256** | `machineDiagnosticMax` |
-| Diagnostics ring, age | 50 aged 25 h | **1** (only the fresh event) | 24 h TTL |
-| Operation ledger, count | 3,000 | **1024** | `machineLedgerMax` |
-
-Both structures are bounded by count **and** age, as `design.md` requires.
-
-**Per-commit coherence** — all 15 commits build and pass their own Go tests; the 12 commits
-that ship JS tests pass those too. Test count drops 33 → 24 at `06b9ab6`; the delta is
-entirely the deleted compatibility-matrix cases, consistent with the ADR.
-
-**Safety rule compliance** — `~/.config/opencode/` was never written. No
-`.acm-opencode-backup.json` and no `*.acm-backup` exist there. Every lifecycle test used
-`ACM_OPENCODE_CONFIG_HOME` pointing at `mktemp -d`. No credentials read, no OAuth login,
-`install.sh` never executed (only simulated offline in `/tmp` with a fake `curl`). Probe
-binaries built in `/tmp` and deleted; the per-commit worktree was created outside the repo and
-removed. Read-only apart from this report.
-
-`~/.config/opencode/` contains **both** `opencode.json` and `opencode.jsonc`, so
-`findOpenCodeConfig` (`opencode_lifecycle.go:127-144`) would correctly abort as ambiguous —
-confirmed by inspection, not by execution.
-
----
-
-## Findings
+## Round-4 Findings
 
 ### CRITICAL
 
-#### C1 — `install.sh` fetches the deleted `compatibility.json`; the installer aborts and never bundles the plugin
-
-**File**: `install.sh:66` · **Introduced by**: `06b9ab6` · **Breaks**: lifecycle R9 S1
-
-Commit `06b9ab6` deleted `integrations/opencode/compatibility.json` but did not update the
-installer's fetch list:
-
-```sh
-install.sh:14   set -eu
-install.sh:66   for file in index.js machine.js oauth.js compat.js quota.js diagnostics.js compatibility.json package.json; do
-install.sh:68     curl -fsSL "$raw" -o "$plugin_tmp/$file"
-```
-
-`curl -f` fails on HTTP 404 and `set -e` aborts the script. Offline simulation of lines 63–77
-with the HEAD file list, using a fake `curl` that 404s only on the missing name:
-
-```
-=== simulating install.sh lines 63-77 with the HEAD file list ===
-curl: (22) The requested URL returned error: 404
-loop_exit=22
-share dir contents: <<< NOT CREATED — plugin was never bundled >>>
-
-=== control: same loop with compatibility.json removed from the list ===
-BUNDLED OK
-loop_exit=0
-share dir contents: compat.js diagnostics.js index.js machine.js oauth.js package.json quota.js
-```
-
-Impact: `acm` itself installs (line 59), then the script dies before `$SHARE_DIR/opencode` is
-created (line 74), before the shell aliases are added (line 108), and before `acm init`
-adopts existing logins (line 118). `acm opencode enable` then fails at
-`opencode_lifecycle.go:60-61` with *"el adaptador OpenCode de ACM no está instalado"*, so the
-entire `acm-opencode-plugin-lifecycle` capability is unreachable in the field — the exact
-failure class round 3 rejected, relocated from the load boundary to the distribution boundary.
-
-Why the suite stayed green: `sh -n install.sh` validates syntax only, and
-`grep -rn 'install.sh' --include='*.go' --include='*.js'` returns **nothing** — `install.sh`
-has no behavioural test at all. The round-3 frozen-boundary discipline that kept out-of-scope
-files byte-identical is precisely what let this through.
-
-#### C2 — Plugin-conflict detection does not stop; the test asserts the opposite of the spec
-
-**Files**: `opencode_lifecycle.go:185-195`, `opencode_lifecycle_test.go:52-56` ·
-**Breaks**: lifecycle R10 S2 · **Round-1 W5, still open and now sharper**
-
-The spec requires:
-
-> #### Scenario: Plugin conflict is detected
-> - GIVEN both ACM and upstream plugin entries are present
-> - THEN the lifecycle command MUST stop with a conflict until guided resolution is confirmed.
-
-`editOpenCode` instead filters **both** entries and appends the ACM URL unconditionally:
-
-```go
-opencode_lifecycle.go:187   upstream := value == "opencode-anthropic-login-via-cli" || strings.HasPrefix(...)
-opencode_lifecycle.go:188   acm := value == pluginURL || strings.HasSuffix(value, "/acm/opencode/index.js")
-opencode_lifecycle.go:189   if !acm && (!enable || !upstream) { result = append(result, value) }
-opencode_lifecycle.go:194   result = append(result, pluginURL)
-```
-
-`enableOpenCode` returns `nil`, so `runOpenCodeLifecycle` prints success and returns `0`. There
-is no conflict detection and no conflict-specific confirmation — `--confirm` is a blanket flag
-required for *every* invocation (`opencode_lifecycle.go:22`), not guided resolution.
-
-The existing test constructs exactly the both-present conflict and asserts the contradiction:
-
-```go
-opencode_lifecycle_test.go:52  "...{\"plugin\":[\"opencode-anthropic-login-via-cli@1.6.1\",\"file:///tmp/acm/opencode/index.js\"],}"
-opencode_lifecycle_test.go:55  check(t, code == 0 && ...)
-opencode_lifecycle_test.go:56  check(t, ... && !strings.Contains(string(changed), "opencode-anthropic-login-via-cli"), ...)
-```
-
-The scenario has no covering test, and the test that touches the state locks in the opposite
-behavior. Either the code must stop on conflict or the spec must be amended — the current pair
-cannot both be right.
-
-#### C3 — The compatibility requirement was invalidated by ADR 0001 but the spec was never amended
-
-**File**: `specs/acm-opencode-claude-auth/spec.md:44,52-56` · **Breaks**: auth R3 S2
-
-The spec still mandates:
-
-> Compatibility-sensitive operations MUST block outside the explicit supported OpenCode/Claude
-> CLI matrix.
->
-> #### Scenario: Unsupported version attempts a sensitive operation
-> - GIVEN the OpenCode or Claude CLI version is outside the supported matrix
-> - THEN the plugin MUST block safely and report the incompatibility.
-
-`06b9ab6` deliberately removes that matrix. `compat.js:22-25` now only *observes* the Claude CLI
-version, and `assertCompatibility` (`compat.js:27-30`) gates on platform and ACM-managed status
-only. My live probe confirms the plugin loads against a `9.9.9` CLI and against no CLI at all.
-
-The removal is correct and well argued in `docs/03-architecture/decisions/0001-use-ecosystem-plugin-compatibility.md`,
-which is Accepted and user-approved. The defect is that the **authoritative spec file was not
-updated as part of the change**, so verification is measured against a requirement the change
-intentionally abandoned. This is a real SDD coherence failure: it leaves the requirement
-permanently unsatisfiable and guarantees this exact contradiction resurfaces in a future round.
-Fix by amending the spec, not the code.
+- **C1 — `install.sh:66` fetches the deleted `compatibility.json`; the installer aborts and never
+  bundles the plugin.** Introduced by `06b9ab6`. Breaks lifecycle R9 S1. Offline simulation showed
+  `curl: (22) ... 404`, `loop_exit=22`, share dir never created; the control with the file removed
+  from the list bundled all seven assets. `acm opencode enable` then failed with *"el adaptador
+  OpenCode de ACM no está instalado"*. `sh -n install.sh` validates syntax only and `install.sh`
+  had no behavioural test at all.
+- **C2 — Plugin-conflict detection does not stop; the test asserts the opposite of the spec.**
+  `opencode_lifecycle.go:185-195` filtered both entries and appended the ACM URL unconditionally;
+  `enableOpenCode` returned `nil` and the command exited `0`. `opencode_lifecycle_test.go:52-56`
+  constructed the both-present conflict and asserted `code == 0`. Breaks lifecycle R10 S2.
+  (Round-1 W5 escalated.)
+- **C3 — The compatibility requirement was invalidated by ADR 0001 but the spec was never
+  amended.** `specs/acm-opencode-claude-auth/spec.md:44,52-56` still mandated blocking outside an
+  explicit OpenCode/Claude CLI matrix that `06b9ab6` deliberately removed. Breaks auth R3 S2. Fix
+  by amending the spec, not the code.
 
 ### WARNING
 
-- **W1 — `quota.exhaust` cooling with `replacement_available: false` is never mapped end-to-end
-  against the real binary.** `machine-contract.test.js:127-133` asserts only the machine-side
-  shape; `quota-integration.test.js:83` exercises only the replacement-available branch. My
-  live probe shows the mapping is correct (`429` + `Retry-After: 3600`), but nothing guards it.
-  *Round-3 W1: still open.*
-
-- **W2 — `oauth.refresh.begin` returning `credential_quarantined` has zero coverage.**
-  `machine.go:344-347`; live probe confirms exit `69`, `retryable:false`. Round-3 W2 partially
-  closes: abort→quarantine **is** covered (`machine_test.go:149-153`, all three terminal
-  reasons) and select→quarantine **is** covered (`machine_test.go:297-311`); the `begin` branch
-  is the residual. *Partially closed.*
-
-- **W3 — The 503 shape is undocumented and mostly unexercised.** Four codes collapse into it;
-  only `state_unavailable` is exercised (`quota-integration:100-107`). `design.md` §Interfaces
-  enumerates exactly four outcomes and none is a 503. Worse, `state_busy` and `invalid_lease`
-  carry exit `75` / `retryable:true` at the machine layer yet surface as 503 with no
-  `Retry-After`. `state_busy` is the *expected* outcome of two concurrent OpenCode instances —
-  the very concurrency `design.md` §Data Flow is built around. *Round-3 W3: partially closed,
-  substantively open.*
-
-- **W4 — Stale generation accepted on a replayed `quota.exhaust`.** `machine.go:451` precedes
-  `machine.go:459`. Live-proven with a working control:
-  ```
-  replay,     profile alpha, generation 1 (actual 2) -> exit 0,  ok:true
-  non-replay, profile beta,  generation 1 (actual 3) -> exit 75, stale_generation
-  ```
-  `machine_test.go:368-370` asserts the accepting behavior, so this is deliberate idempotency,
-  not an oversight. It is **non-corrupting** — the branch returns before `saveMachineState`, so
-  newer state is never overwritten and the response carries the *current* generation. But it
-  contradicts failover R7's literal "MUST … reject stale generations" and is undocumented in
-  `design.md`. Document the idempotency exception or move the generation check above line 451.
-  *Round-3 W4: still open, now precisely characterised.*
-
-- **W5 — escalated to C2.**
-
-- **W6 — ENOENT leaks a filesystem path out of `auth.fetch`.** `index.js:25` reads the
-  credential file; `index.js:54-57` maps only errors carrying `.machine` and rethrows everything
-  else raw. Live-proven with control:
-  ```
-  THROWN message: ENOENT: no such file or directory, open '/tmp/.../VERY-PRIVATE-PROFILE-DIR/.credentials.json'
-  LEAKS PATH?   : YES — full profile path escaped
-  control (valid credential): status 200 body ok-control
-  ```
-  Not a credential leak, but it discloses the ACM directory layout and profile name into
-  OpenCode's error surface and logs, against the security baseline's "hide internals in errors".
-  The machine boundary is correctly hardened; this read boundary is not. No test.
-  *Round-3 W6: still open.*
-
-- **W7 (new) — Four machine error codes have zero coverage anywhere.** `unknown_operation`
-  (`machine.go:447`), `state_busy` (`machine.go:201,318`), `invalid_lease`
-  (`machine.go:372,421`), and the dispatcher `default:` `invalid_operation` (`machine.go:106`).
-  All four verified correct by live probe; none is guarded by any Go or JS test. The JS
-  `invalid_operation` test (`machine-process.test.js:21`) hits `machine.js`'s own allowlist and
-  never reaches the binary. `unknown_operation` is reachable in production once the 1024-record
-  ledger evicts an in-flight operation, and it turns a genuine provider 429 into a
-  non-retryable 503.
+- **W1** — `quota.exhaust` cooling with `replacement_available: false` never mapped end-to-end
+  against the real binary.
+- **W2** — `oauth.refresh.begin` returning `credential_quarantined` had zero coverage
+  (`machine.go:344-347`).
+- **W3** — the 503 shape was undocumented and mostly unexercised; four codes collapsed into it and
+  `state_busy` / `invalid_lease` carried `retryable:true` at the machine layer yet surfaced with no
+  `Retry-After`.
+- **W4** — stale generation accepted on a replayed `quota.exhaust` (`machine.go:451` precedes
+  `machine.go:459`); deliberate idempotency, non-corrupting, but contradicting failover R7 and
+  undocumented.
+- **W5** — escalated to C2.
+- **W6** — ENOENT leaked a filesystem path out of `auth.fetch` (`index.js:25,54-57`), disclosing
+  the ACM directory layout and profile name into OpenCode's error surface.
+- **W7** — four machine error codes had zero coverage anywhere: `unknown_operation`,
+  `state_busy`, `invalid_lease`, and the dispatcher `default:` `invalid_operation`.
 
 ### SUGGESTION
 
-- **S1 — `fsync` misses the directory entry.** `atomicWriteMachineFile` (`machine.go:623-641`)
-  syncs the temp file (`machine.go:632`) but never opens and syncs `filepath.Dir(path)` after
-  `os.Rename` (`machine.go:640`). A crash can lose the rename even though the data was durable.
-  Affects both the state file and the committed credential file. *Round-3 S1: still open.*
+- **S1** — `atomicWriteMachineFile` synced the temp file but never `filepath.Dir(path)` after
+  `os.Rename`, so a crash could lose the rename.
+- **S2** — `compat.test.js:18-21` was self-referential (read `package.json`, asserted
+  `package.json`).
+- **S3** — `ACM diagnostics: record_failed` on stderr assessed as acceptable best-effort behavior,
+  not a defect.
+- **S4** — `output_too_large` (`machine.go:111-115`) was dead code; a full 256-event ring truncates
+  to 64 events and 6,658 bytes, far under the 16 KiB cap.
+- **S5** — `quota.test.js` stubs omitted `replacement_available`, so the `Retry-After` expectation
+  rested on `undefined !== true`.
+- **S6** — `validMachineRequest` was lax for read operations (`machine.go:159`).
 
-- **S2 — `compat.test.js:18-21` is self-referential.** It reads `package.json` and asserts that
-  `package.json` says `^1.18.18` — the same structural shape as round-3 C1 (comparing the pinned
-  file to itself). Harmless now that nothing gates on it, but it proves nothing about the
-  ecosystem. There is no lockfile and no `node_modules`, so no installed-range evidence exists.
+## Round-4 Verdict
 
-- **S3 — `ACM diagnostics: record_failed` on stderr is correct but noisy.** Assessment: this is
-  **acceptable best-effort behavior, not a defect.** The string is a fixed, redacted code with
-  no path, token, or identifier; it fires on plugin *invocation* (not bare import — my probe
-  confirms a bare `import` is silent); and the plugin still returns fully functional hooks
-  (`index.js:19-22` never throws). It is the correct observable signal for a diagnostics sink
-  that could not reach `acm`. The only real objection is that it is unconditional and
-  unsilenceable, and in normal operation `acm` is always on PATH — so if it fires, something is
-  genuinely wrong and the user should see it. Recommend keeping it; optionally emit once per
-  process rather than per load.
-
-- **S4 — `output_too_large` is dead code.** `machine.go:111-115` cannot trigger:
-  `diagnostics.status` truncates to the last 64 events (`machine.go:249-251`), producing 6,658
-  bytes with a completely full 256-event ring — far under the 16 KiB cap. Verified live. Keep as
-  defence-in-depth or delete, but do not count it as coverage.
-
-- **S5 — `quota.test.js` stubs omit `replacement_available`.** Lines 28, 50, 56, 100 return
-  `{outcome, generation, reset_at}`. The `Retry-After: 45` expectation at line 35 therefore
-  depends on `undefined !== true` rather than a modelled state. Add
-  `replacement_available: false` so the stub states which of the four design outcomes it models.
-
-- **S6 — `validMachineRequest` is lax for read operations.** `machine.go:159` does not constrain
-  `Profile`, `Generation`, `LeaseID`, or `ExpiresAt` on `credential.select`,
-  `diagnostics.status`, `oauth.refresh.begin`, or `oauth.refresh.abort`. The fields are ignored,
-  so there is no exploit, but the strict-boundary posture stated in `design.md` §Interfaces
-  ("unknown fields/versions fail") is only partially realised.
-
----
-
-## Per-Finding Closure Verdicts
-
-| Round | Item | Verdict | Note |
-|---|---|---|---|
-| R3 | **C1** pinned matrix matches no shipping release | **CLOSED** | entry point loads; matrix/resolver/checker removed; ADR 0001 recorded |
-| R3 | W1 cooling via `quota.exhaust` (`replacement_available:false`) | **OPEN** | machine shape asserted; adapter mapping still unexercised |
-| R3 | W2 quarantine via `oauth.refresh.begin` | **PARTIALLY CLOSED** | abort→quarantine and select→quarantine covered; `begin` branch still unexercised |
-| R3 | W3 undocumented `503` for `no_available_profile` | **PARTIALLY CLOSED** | a 503 is now exercised, but for `state_unavailable`; shape still undocumented and 3 of 4 codes unexercised |
-| R3 | W4 stale generation on replayed `quota.exhaust` | **OPEN** | live-proven; deliberately asserted at `machine_test.go:368`; non-corrupting |
-| R3 | W5 plugin conflict returns `0` and silently rewrites | **OPEN → ESCALATED to C2** | test asserts the contradiction |
-| R3 | W6 ENOENT leaks a filesystem path | **OPEN** | live-proven with control |
-| R3 | S1 `fsync` misses the directory entry | **OPEN** | `machine.go:640` |
-| R3 | `opencode.json` + `opencode.jsonc` both present → ambiguous abort | **CONFIRMED CORRECT** | `opencode_lifecycle.go:127-144`; covered by `TestOpenCodeMigrationRollbackOnJSONCConflict` |
-| R2 | `machineQuotaResponse` always cooling + `Retry-After` | **CLOSED** | `replacement_available` added; mutation-proven guard; live 429-without-header |
-| R2 | negative control passes on a bogus field name | **CLOSED** | mutation 2a fails, 2b proves the prior weakness |
-| R1 | `quota.exhaust` in JS but not Go | **CLOSED** | real-binary contract test spawns compiled `acm` |
-| R1 | `retry_after` vs `reset_at` key drift | **CLOSED** | mutation 1 proves the guard detects live key drift |
-| R1 | compatibility gate compared the pinned file to itself | **CLOSED** | gate removed entirely (see C3 for the spec-side residue) |
-| R1 | diagnostics never ran in production | **CLOSED** | `index.js:11-22` production sink; `quota-integration:79,85` asserts the real `diagnostics.record` call |
-| R1 | 3 of 4 `design.md` outcomes implemented | **CLOSED** | all four present in one mapping path (`quota.js:46-67`) |
-
-## Required Before This Change Can Pass
-
-1. **C1** — remove `compatibility.json` from `install.sh:66`, and add a test that asserts the
-   installer's file list equals the set of files actually shipped in
-   `integrations/opencode/`. Without that test this class recurs on the next file rename.
-2. **C2** — either implement conflict detection that stops with a non-zero exit until guided
-   resolution, or amend lifecycle R10 S2. Then make `opencode_lifecycle_test.go:51-62` assert
-   the chosen contract instead of the current contradiction.
-3. **C3** — amend `specs/acm-opencode-claude-auth/spec.md` R3 so the compatibility requirement
-   matches ADR 0001. Code change not required.
-4. **W1–W7** — close the coverage states above. Four rounds in a row the failure has been an
-   unexercised documented state; adding these guards is what breaks the pattern.
-
-## Final Verdict
-
-**FAIL** — 3 CRITICAL, 6 WARNING, 6 SUGGESTION.
-
-Round-3 C1 is genuinely closed and the round-1/round-2 defects hold under mutation. But the
-fix that closed C1 opened C1' at the installer boundary, and two specification scenarios remain
-contradicted by the code and by their own tests. The change is not ready to merge.
-
-*No file was fixed. All mutated files restored byte-identical and checksum-verified. Read-only
-apart from this report.*
+**FAIL** — 3 CRITICAL, 6 WARNING, 6 SUGGESTION. Round-3 C1 genuinely closed and the round-1/2
+defects held under mutation, but the fix that closed C1 opened C1' at the installer boundary, and
+two specification scenarios remained contradicted by the code and by their own tests.
