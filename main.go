@@ -42,11 +42,11 @@ const version = "2.0.0"
 // ---------- configuración global ----------
 
 var (
-	homeDir string
-	acmDir  string
-	profDir string
-	stateDir string
-	coolDir string
+	homeDir            string
+	acmDir             string
+	profDir            string
+	stateDir           string
+	coolDir            string
 	defaultCooldownMin = 60
 )
 
@@ -1145,6 +1145,7 @@ func usage() {
   acm free <tool> <perfil>    quita la marca de límite
   acm quota [tool] [--raw]    cuota restante por cuenta SIN gastar tokens
   acm run <tool> [args...]    no-interactivo con failover (claude -p / codex exec)
+  acm machine v1 <operation>  bounded, secretless JSON integration API
   acm <tool> [args...]        interactivo en el primer perfil disponible
 
 tools: claude | codex
@@ -1182,6 +1183,8 @@ func main() {
 		rc = cmdFree(rest)
 	case "run":
 		rc = cmdRun(rest)
+	case "machine":
+		rc = cmdMachine(rest)
 	case "quota":
 		rc = cmdQuota(rest)
 	case "claude", "codex":
