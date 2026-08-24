@@ -1,0 +1,13 @@
+{
+  "name": "acm-opencode-anthropic-integration",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check:compat": "node scripts/check-compat.js"
+  }
+}

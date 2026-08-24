@@ -1,0 +1,17 @@
+{
+  "versions": { "opencode": "1.18.19", "sdk": "1.17.12", "claude": "2.1.236" },
+  "hash": {
+    "session": "session-1",
+    "message": "message-1",
+    "expected": "3111c35e6a965cb255606dedf5f0cbdb8b0fc7bc03072b6b35f70f6894815433"
+  },
+  "request": {
+    "input": { "model": "claude", "system": "hello", "tools": [{ "name": "read" }] },
+    "system": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+    "tool": "mcp_Read"
+  },
+  "credentials": {
+    "source": { "claudeAiOauth": { "accessToken": "old-access", "refreshToken": "old-refresh", "expiresAt": 1 } },
+    "response": { "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600 }
+  }
+}
