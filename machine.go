@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,11 +26,20 @@ const (
 
 var operationIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]{1,128}$`)
+var machineSync = (*os.File).Sync
+var machinePersist = atomicWriteMachineFile
 
 type machineRequest struct {
 	SchemaVersion int    `json:"schema_version"`
 	Operation     string `json:"operation"`
 	OperationID   string `json:"operation_id"`
+	Profile       string `json:"profile"`
+	Generation    uint64 `json:"generation"`
+	LeaseID       string `json:"lease_id"`
+	AccessToken   string `json:"access_token"`
+	RefreshToken  string `json:"refresh_token"`
+	ExpiresAt     int64  `json:"expires_at"`
+	Reason        string `json:"reason"`
 }
 
 type machineOperation struct {
@@ -38,8 +49,16 @@ type machineOperation struct {
 }
 
 type machineState struct {
-	Generation uint64             `json:"generation"`
-	Operations []machineOperation `json:"operations"`
+	Generation  uint64             `json:"generation"`
+	Operations  []machineOperation `json:"operations"`
+	Leases      []machineLease     `json:"leases,omitempty"`
+	Quarantined []string           `json:"quarantined,omitempty"`
+}
+
+type machineLease struct {
+	ID        string `json:"id"`
+	Profile   string `json:"profile"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 func machineFailure(op, id, code, message string, retryable bool) map[string]any {
@@ -55,6 +74,12 @@ func runMachine(args []string, in io.Reader, out io.Writer) int {
 			response, exit = selectMachineProfile(req)
 		case "diagnostics.status":
 			response, exit = machineStatus(req)
+		case "oauth.refresh.begin":
+			response, exit = beginMachineRefresh(req)
+		case "oauth.refresh.commit":
+			response, exit = commitMachineRefresh(req)
+		case "oauth.refresh.abort":
+			response, exit = abortMachineRefresh(req)
 		default:
 			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_operation", "unsupported machine operation", false), machineExitInvalid
 		}
@@ -93,10 +118,17 @@ func decodeMachineRequest(args []string, in io.Reader) (machineRequest, map[stri
 	if req.SchemaVersion != 1 {
 		return req, machineFailure(op, "", "unsupported_version", "unsupported schema version", false), machineExitInvalid
 	}
-	if req.Operation != op || !operationIDPattern.MatchString(req.OperationID) {
+	if req.Operation != op || !operationIDPattern.MatchString(req.OperationID) || !validMachineRequest(req) {
 		return req, machineFailure(op, "", "invalid_request", "operation or operation_id is invalid", false), machineExitInvalid
 	}
 	return req, nil, 0
+}
+
+func validMachineRequest(req machineRequest) bool {
+	if req.Operation == "oauth.refresh.commit" {
+		return profileNamePattern.MatchString(req.Profile) && req.Generation > 0 && req.LeaseID != "" && req.AccessToken != "" && req.RefreshToken != "" && req.ExpiresAt > 0 && req.Reason == ""
+	}
+	return req.AccessToken == "" && req.RefreshToken == ""
 }
 
 func selectMachineProfile(req machineRequest) (response map[string]any, exit int) {
@@ -115,7 +147,7 @@ func selectMachineProfile(req machineRequest) (response map[string]any, exit int
 				break
 			}
 		}
-		name, dir, err := nextMachineProfile(tools["claude"], record.Profiles)
+		name, dir, err := nextMachineProfile(tools["claude"], record.Profiles, state.Quarantined)
 		if err != nil {
 			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
 			return nil
@@ -152,7 +184,7 @@ func machineStatus(req machineRequest) (map[string]any, int) {
 		"operation_id": req.OperationID, "generation": state.Generation}, 0
 }
 
-func nextMachineProfile(t *tool, attempted []string) (string, string, error) {
+func nextMachineProfile(t *tool, attempted, quarantined []string) (string, string, error) {
 	for _, name := range orderedProfiles(t, false) {
 		dir, err := canonicalMachineProfile(t, name)
 		if dir == "" && err == nil {
@@ -161,11 +193,135 @@ func nextMachineProfile(t *tool, attempted []string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		if !inCooldown(t, name) && !slices.Contains(attempted, name) {
+		if !inCooldown(t, name) && !slices.Contains(attempted, name) && !slices.Contains(quarantined, name) {
 			return name, dir, nil
 		}
 	}
 	return "", "", nil
+}
+
+func finishMachineState(req machineRequest, response map[string]any, exit int, err error) (map[string]any, int) {
+	if err == nil || exit == 74 && response != nil {
+		return response, exit
+	}
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return machineFailure(req.Operation, req.OperationID, "state_busy", "ACM state is busy", true), 75
+	}
+	return machineFailure(req.Operation, req.OperationID, "state_unavailable", "ACM state is unavailable", false), 74
+}
+
+func updateMachineState(fn func(*machineState) error) error {
+	return withMachineState(func() error {
+		state, err := loadMachineState()
+		if err != nil {
+			return err
+		}
+		if err = fn(&state); err != nil {
+			return err
+		}
+		return saveMachineState(state)
+	})
+}
+
+func beginMachineRefresh(req machineRequest) (response map[string]any, exit int) {
+	err := updateMachineState(func(state *machineState) error {
+		now := time.Now().Unix()
+		state.Leases = slices.DeleteFunc(state.Leases, func(lease machineLease) bool { return lease.ExpiresAt <= now })
+		if state.Generation != req.Generation {
+			response, exit = machineFailure(req.Operation, req.OperationID, "stale_generation", "refresh generation is stale", true), 75
+			return nil
+		}
+		if slices.Contains(state.Quarantined, req.Profile) {
+			response, exit = machineFailure(req.Operation, req.OperationID, "credential_quarantined", "credential requires acm login", false), machineExitUnavailable
+			return nil
+		}
+		if dir, pathErr := canonicalMachineProfile(tools["claude"], req.Profile); pathErr != nil || dir == "" {
+			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_profile_path", "ACM profile path is unsafe", false), machineExitInvalid
+			return nil
+		}
+		if slices.ContainsFunc(state.Leases, func(lease machineLease) bool { return lease.Profile == req.Profile }) {
+			response, exit = machineFailure(req.Operation, req.OperationID, "lease_busy", "refresh lease is busy", true), 75
+			return nil
+		}
+		var token [16]byte
+		if _, err := rand.Read(token[:]); err != nil {
+			return err
+		}
+		lease := machineLease{ID: hex.EncodeToString(token[:]), Profile: req.Profile, ExpiresAt: now + 120}
+		state.Leases = append(state.Leases, lease)
+		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "lease_id": lease.ID, "expires_at": lease.ExpiresAt, "generation": state.Generation}
+		return nil
+	})
+	return finishMachineState(req, response, exit, err)
+}
+
+func commitMachineRefresh(req machineRequest) (response map[string]any, exit int) {
+	err := updateMachineState(func(state *machineState) error {
+		index := slices.IndexFunc(state.Leases, func(lease machineLease) bool { return lease.ID == req.LeaseID && lease.Profile == req.Profile })
+		if index < 0 {
+			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_lease", "refresh lease is invalid", true), 75
+			return nil
+		}
+		lease := state.Leases[index]
+		if lease.ExpiresAt <= time.Now().Unix() || state.Generation != req.Generation {
+			state.Leases = append(state.Leases[:index], state.Leases[index+1:]...)
+			code := "stale_generation"
+			if lease.ExpiresAt <= time.Now().Unix() {
+				code = "lease_expired"
+			}
+			response, exit = machineFailure(req.Operation, req.OperationID, code, "refresh lease is stale", true), 75
+			return nil
+		}
+		dir, err := canonicalMachineProfile(tools["claude"], req.Profile)
+		if err != nil || dir == "" {
+			return errors.New("unsafe credential path")
+		}
+		path := filepath.Join(dir, tools["claude"].credFile)
+		data, err := os.ReadFile(path)
+		var document map[string]any
+		if err != nil || json.Unmarshal(data, &document) != nil {
+			return errors.New("invalid credential state")
+		}
+		oauth, _ := document["claudeAiOauth"].(map[string]any)
+		if oauth == nil {
+			oauth = map[string]any{}
+		}
+		oauth["accessToken"], oauth["refreshToken"], oauth["expiresAt"] = req.AccessToken, req.RefreshToken, req.ExpiresAt
+		document["claudeAiOauth"] = oauth
+		data, err = json.Marshal(document)
+		if err == nil {
+			err = machinePersist(path, append(data, '\n'))
+		}
+		if err != nil {
+			response, exit = machineFailure(req.Operation, req.OperationID, "persistence_failed", "credential persistence failed", false), 74
+			return err
+		}
+		state.Leases = append(state.Leases[:index], state.Leases[index+1:]...)
+		state.Generation++
+		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "outcome": "committed", "generation": state.Generation}
+		return nil
+	})
+	return finishMachineState(req, response, exit, err)
+}
+
+func abortMachineRefresh(req machineRequest) (response map[string]any, exit int) {
+	err := updateMachineState(func(state *machineState) error {
+		index := slices.IndexFunc(state.Leases, func(lease machineLease) bool { return lease.ID == req.LeaseID && lease.Profile == req.Profile })
+		if index < 0 {
+			response, exit = machineFailure(req.Operation, req.OperationID, "invalid_lease", "refresh lease is invalid", true), 75
+			return nil
+		}
+		state.Leases = append(state.Leases[:index], state.Leases[index+1:]...)
+		terminal := req.Reason == "invalid_grant" || req.Reason == "revoked" || req.Reason == "unrecoverable"
+		outcome := "aborted"
+		if terminal && !slices.Contains(state.Quarantined, req.Profile) {
+			state.Quarantined, state.Generation = append(state.Quarantined, req.Profile), state.Generation+1
+			outcome = "quarantined"
+		}
+		response = map[string]any{"schema_version": 1, "ok": true, "operation": req.Operation, "operation_id": req.OperationID, "outcome": outcome, "generation": state.Generation}
+		return nil
+	})
+	return finishMachineState(req, response, exit, err)
 }
 
 func canonicalMachineProfile(t *tool, name string) (string, error) {
@@ -229,11 +385,27 @@ func loadMachineState() (machineState, error) {
 
 func saveMachineState(state machineState) error {
 	data, _ := json.Marshal(state)
-	path := machineStateFile()
-	if err := os.WriteFile(path+".tmp", append(data, '\n'), 0o600); err != nil {
+	return machinePersist(machineStateFile(), append(data, '\n'))
+}
+
+func atomicWriteMachineFile(path string, data []byte) (err error) {
+	file, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(path+".tmp", path)
+	temporary := file.Name()
+	defer func() { file.Close(); os.Remove(temporary) }()
+	_, err = file.Write(data)
+	if err == nil {
+		err = machineSync(file)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func withMachineState(fn func() error) error {
