@@ -15,6 +15,7 @@ const runtimeAssets = [
 
 async function createHostCanaries(root) {
   const home = join(root, "host-home");
+  const customShare = join(root, "host-custom-share");
   const paths = [
     join(home, ".bashrc"),
     join(home, ".zshrc"),
@@ -22,28 +23,19 @@ async function createHostCanaries(root) {
     join(home, ".config", "opencode", "opencode.json"),
     join(home, ".local", "bin", "acm"),
     join(home, ".local", "share", "acm", "opencode", "index.js"),
+    join(customShare, "opencode", "index.js"),
   ];
   await Promise.all(paths.map(async (path) => {
     await mkdir(join(path, ".."), { recursive: true });
     await writeFile(path, `host-canary:${path}\n`);
   }));
-  return { home, paths, bytes: await Promise.all(paths.map((path) => readFile(path))) };
+  return { home, customShare, paths, bytes: await Promise.all(paths.map((path) => readFile(path))) };
 }
 
 async function createOfflineCommands(root) {
   const bin = join(root, "fixture-bin");
   const log = join(root, "fixture.log");
-  const acm = join(bin, "acm");
   await mkdir(bin, { recursive: true });
-  await writeFile(acm, `#!/bin/sh
-set -eu
-printf 'acm|%s|%s|%s|%s\\n' "$HOME" "$ACM_BIN_DIR" "$ACM_SHARE_DIR" "$*" >> "$ACM_FIXTURE_LOG"
-case "\${1:-}" in
-  version) printf 'acm fixture\\n' ;;
-  init) exit 0 ;;
-  *) exit 64 ;;
-esac
-`, { mode: 0o755 });
   await writeFile(join(bin, "curl"), `#!/bin/sh
 set -eu
 url= output=
@@ -72,37 +64,76 @@ case "$url" in
   *) printf 'fixture: unexpected URL %s\\n' "$url" >&2; exit 64 ;;
 esac
 `, { mode: 0o755 });
-  return { bin, log, acm };
+  return { bin, log };
 }
 
-test("installs the complete OpenCode runtime atomically without touching host state", async (t) => {
+async function buildRealACM(root) {
+  const buildHome = join(root, "build-home");
+  const buildTmp = join(root, "build-tmp");
+  const goCache = join(root, "go-cache");
+  const goModCache = join(root, "go-mod-cache");
+  const binary = join(root, "release", "acm");
+  await Promise.all([
+    buildHome, buildTmp, goCache, goModCache, join(root, "release"),
+  ].map((path) => mkdir(path, { recursive: true })));
+  const built = spawnSync("go", ["build", "-o", binary, "."], {
+    cwd: repository,
+    env: {
+      HOME: buildHome,
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      TMPDIR: buildTmp,
+      GOCACHE: goCache,
+      GOMODCACHE: goModCache,
+      GOPROXY: "off",
+      GOSUMDB: "off",
+      GOENV: "off",
+      CGO_ENABLED: "0",
+    },
+    encoding: "utf8",
+  });
+  assert.equal(built.status, 0, built.stderr);
+  return binary;
+}
+
+test("installs, enables, loads, and rolls back the custom-share OpenCode runtime without touching host state", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "acm-install-"));
   const sandboxHome = join(root, "sandbox-home");
   const installBin = join(root, "installed-bin");
   const share = join(root, "installed-share");
+  const configHome = join(root, "opencode-config");
+  const acmDir = join(root, "acm-state");
   const temporary = join(root, "tmp");
   const host = await createHostCanaries(root);
   const commands = await createOfflineCommands(root);
-  await Promise.all([sandboxHome, installBin, share, temporary].map((path) => mkdir(path, { recursive: true })));
+  await Promise.all([
+    sandboxHome, installBin, share, configHome, acmDir, temporary,
+  ].map((path) => mkdir(path, { recursive: true })));
+  const releaseBinary = await buildRealACM(root);
+  const configPath = join(configHome, "opencode.json");
+  const originalConfig = Buffer.from('{"model":"anthropic/claude"}\n');
+  await writeFile(configPath, originalConfig, { mode: 0o600 });
   t.after(async () => {
     assert.deepEqual(await Promise.all(host.paths.map((path) => readFile(path))), host.bytes,
       "host aliases, credentials, configuration, and real install targets changed");
     const log = await readFile(commands.log, "utf8");
     assert.doesNotMatch(log, new RegExp(host.home.replaceAll("/", "\\/")));
-    assert.match(log, new RegExp(`acm\\|${sandboxHome.replaceAll("/", "\\/")}\\|${installBin.replaceAll("/", "\\/")}\\|${share.replaceAll("/", "\\/")}\\|init`));
+    assert.doesNotMatch(log, new RegExp(host.customShare.replaceAll("/", "\\/")));
     await rm(root, { recursive: true, force: true });
     await assert.rejects(access(root), { code: "ENOENT" });
+    t.diagnostic("host_canaries=unchanged sandbox_removed=true");
   });
   const env = {
-    ...process.env,
     HOME: sandboxHome,
-    PATH: `${commands.bin}:/usr/bin:/bin`,
+    PATH: `${installBin}:${commands.bin}:/usr/bin:/bin`,
     TMPDIR: temporary,
+    GOCACHE: join(root, "runtime-go-cache"),
     ACM_VERSION: "v-fixture",
+    ACM_DIR: acmDir,
     ACM_BIN_DIR: installBin,
     ACM_SHARE_DIR: share,
+    ACM_OPENCODE_CONFIG_HOME: configHome,
     ACM_FIXTURE_LOG: commands.log,
-    ACM_FAKE_ACM: commands.acm,
+    ACM_FAKE_ACM: releaseBinary,
     ACM_FIXTURE_REPOSITORY: repository,
   };
   const run = (extra = {}) => spawnSync("sh", [installer], {
@@ -113,13 +144,46 @@ test("installs the complete OpenCode runtime atomically without touching host st
   assert.equal(installed.status, 0, installed.stderr);
   const pluginDir = join(share, "opencode");
   assert.deepEqual((await readdir(pluginDir)).sort(), runtimeAssets);
-  const module = await import(`${pathToFileURL(join(pluginDir, "index.js")).href}?fixture=${Date.now()}`);
+  const enabled = spawnSync("acm", ["opencode", "enable", "--confirm"], {
+    cwd: root, env, encoding: "utf8",
+  });
+  assert.equal(enabled.status, 0, enabled.stderr);
+  const enabledConfig = JSON.parse(await readFile(configPath, "utf8"));
+  assert.deepEqual(enabledConfig.plugin, [pathToFileURL(join(pluginDir, "index.js")).href]);
+  const module = await import(`${enabledConfig.plugin[0]}?fixture=${Date.now()}`);
   const hooks = await module.createPlugin({
     platform: "linux",
     diagnostic: () => {},
     versionIO: { execFile: (_command, _args, _options, done) => done(null, "fixture-cli\n", "") },
   })();
   assert.deepEqual(Object.keys(hooks).sort(), ["auth", "chat.headers"]);
+  const rolledBack = spawnSync("acm", ["opencode", "rollback", "--confirm"], {
+    cwd: root, env, encoding: "utf8",
+  });
+  assert.equal(rolledBack.status, 0, rolledBack.stderr);
+  assert.deepEqual(await readFile(configPath), originalConfig);
+  await assert.rejects(access(`${configPath}.acm-backup`), { code: "ENOENT" });
+  await assert.rejects(access(join(configHome, ".acm-opencode-backup.json")), { code: "ENOENT" });
+  t.diagnostic(`install_exit=${installed.status}`);
+  t.diagnostic(`enable_exit=${enabled.status}`);
+  t.diagnostic(`enabled_plugin=${enabledConfig.plugin[0]}`);
+  t.diagnostic(`loaded_hooks=${Object.keys(hooks).sort().join(",")}`);
+  t.diagnostic(`rollback_exit=${rolledBack.status} restored_bytes=${originalConfig.length}`);
+
+  const defaultPlugin = join(sandboxHome, ".local", "share", "acm", "opencode", "index.js");
+  await mkdir(join(defaultPlugin, ".."), { recursive: true });
+  await writeFile(defaultPlugin, "export default {}\n", { mode: 0o600 });
+  const missingShare = join(root, "missing-custom-share");
+  const missingCustom = spawnSync("acm", ["opencode", "enable", "--confirm"], {
+    cwd: root, env: { ...env, ACM_SHARE_DIR: missingShare }, encoding: "utf8",
+  });
+  assert.equal(missingCustom.status, 2, missingCustom.stderr);
+  assert.match(missingCustom.stderr, /adaptador OpenCode de ACM no está instalado/);
+  assert.deepEqual(await readFile(configPath), originalConfig);
+  await assert.rejects(access(`${configPath}.acm-backup`), { code: "ENOENT" });
+  await assert.rejects(access(join(configHome, ".acm-opencode-backup.json")), { code: "ENOENT" });
+  t.diagnostic("missing_custom_share_exit=2 default_fallback=false config_unchanged=true");
+
   const bundle = await Promise.all(runtimeAssets.map((asset) => readFile(join(pluginDir, asset))));
 
   const rejected = run({ ACM_FAIL_ASSET: "quota.js" });

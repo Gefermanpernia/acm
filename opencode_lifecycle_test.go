@@ -11,9 +11,17 @@ import (
 
 func setupOpenCodeLifecycle(t *testing.T, name, config string) (string, string) {
 	t.Helper()
-	home := t.TempDir()
+	root := t.TempDir()
+	home := filepath.Join(root, "config")
+	plugin := filepath.Join(root, "plugin", "index.js")
+	for _, dir := range []string{home, filepath.Dir(plugin), filepath.Join(root, "home"), filepath.Join(root, "acm"), filepath.Join(root, "bin"), filepath.Join(root, "share")} {
+		check(t, os.MkdirAll(dir, 0o700) == nil, "create isolated lifecycle directory")
+	}
 	t.Setenv("ACM_OPENCODE_CONFIG_HOME", home)
-	plugin := filepath.Join(t.TempDir(), "index.js")
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("ACM_DIR", filepath.Join(root, "acm"))
+	t.Setenv("ACM_BIN_DIR", filepath.Join(root, "bin"))
+	t.Setenv("ACM_SHARE_DIR", filepath.Join(root, "share"))
 	check(t, os.WriteFile(plugin, []byte("export default {}\n"), 0o600) == nil, "write plugin")
 	t.Setenv("ACM_OPENCODE_PLUGIN_PATH", plugin)
 	path := filepath.Join(home, name)
@@ -100,6 +108,73 @@ func TestOpenCodeMigrationRealBinaryRequiresExplicitReplacement(t *testing.T) {
 	_, backupErr = os.Stat(path + ".acm-backup")
 	check(t, code == 0 && strings.Contains(output, "Reinicia OpenCode") && strings.Contains(string(changed), "index.js") && !strings.Contains(string(changed), "opencode-anthropic-login-via-cli"), "real binary replacement failed: exit=%d output=%s", code, output)
 	check(t, manifestErr == nil && backupErr == nil, "real binary replacement did not create rollback backup")
+}
+
+func TestOpenCodeMigrationPlainEnableCreatesRestorableBackup(t *testing.T) {
+	original := []byte("// preserve plain opt-in\n{\"model\":\"anthropic/claude\"}\n")
+	home, path := setupOpenCodeLifecycle(t, "opencode.jsonc", string(original))
+	code, output := runOpenCodeTest(t, "enable", "--confirm")
+	backup, backupErr := os.ReadFile(path + ".acm-backup")
+	manifest, manifestErr := os.ReadFile(filepath.Join(home, openCodeManifest))
+	wantManifest := filepath.Base(path) + ":" + checksumOpenCode(original)
+	check(t, code == 0 && strings.Contains(output, "Reinicia OpenCode"), "plain enable failed: exit=%d output=%s", code, output)
+	check(t, backupErr == nil && bytes.Equal(backup, original), "plain enable backup = %q, err = %v", backup, backupErr)
+	check(t, manifestErr == nil && string(manifest) == wantManifest, "plain enable manifest = %q, err = %v", manifest, manifestErr)
+
+	enabled, _ := os.ReadFile(path)
+	code, secondOutput := runOpenCodeTest(t, "enable", "--confirm")
+	afterSecondEnable, _ := os.ReadFile(path)
+	backupAfterSecondEnable, _ := os.ReadFile(path + ".acm-backup")
+	manifestAfterSecondEnable, _ := os.ReadFile(filepath.Join(home, openCodeManifest))
+	check(t, code == 2 && strings.Contains(secondOutput, "ya existe un respaldo") && bytes.Equal(afterSecondEnable, enabled), "second enable bypassed the existing-backup guard")
+	check(t, bytes.Equal(backupAfterSecondEnable, backup) && bytes.Equal(manifestAfterSecondEnable, manifest), "second enable changed the backup transaction")
+
+	code, output = runOpenCodeTest(t, "rollback", "--confirm")
+	restored, _ := os.ReadFile(path)
+	_, backupErr = os.Stat(path + ".acm-backup")
+	_, manifestErr = os.Stat(filepath.Join(home, openCodeManifest))
+	check(t, code == 0 && bytes.Equal(restored, original), "plain rollback failed: exit=%d output=%s", code, output)
+	check(t, os.IsNotExist(backupErr) && os.IsNotExist(manifestErr), "plain rollback retained backup artifacts")
+
+	t.Run("real compiled binary", func(t *testing.T) {
+		home, path := setupOpenCodeLifecycle(t, "opencode.json", string(original))
+		root := filepath.Dir(home)
+		bin := filepath.Join(root, "bin", "acm")
+		tmp, cache := filepath.Join(root, "tmp"), filepath.Join(root, "go-cache")
+		check(t, os.MkdirAll(tmp, 0o700) == nil && os.MkdirAll(cache, 0o700) == nil, "create isolated build directories")
+		environment := []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + filepath.Join(root, "home"),
+			"ACM_DIR=" + filepath.Join(root, "acm"),
+			"ACM_BIN_DIR=" + filepath.Join(root, "bin"),
+			"ACM_SHARE_DIR=" + filepath.Join(root, "share"),
+			"ACM_OPENCODE_CONFIG_HOME=" + home,
+			"ACM_OPENCODE_PLUGIN_PATH=" + os.Getenv("ACM_OPENCODE_PLUGIN_PATH"),
+			"TMPDIR=" + tmp,
+			"GOCACHE=" + cache,
+		}
+		build := exec.Command("go", "build", "-o", bin, ".")
+		build.Env = environment
+		buildOutput, err := build.CombinedOutput()
+		check(t, err == nil, "build isolated acm: %v\n%s", err, buildOutput)
+		run := func(args ...string) (int, string) {
+			command := exec.Command(bin, append([]string{"opencode"}, args...)...)
+			command.Env = environment
+			output, err := command.CombinedOutput()
+			if err == nil {
+				return 0, string(output)
+			}
+			return err.(*exec.ExitError).ExitCode(), string(output)
+		}
+		code, output := run("enable", "--confirm")
+		backup, backupErr := os.ReadFile(path + ".acm-backup")
+		manifest, manifestErr := os.ReadFile(filepath.Join(home, openCodeManifest))
+		check(t, code == 0 && backupErr == nil && manifestErr == nil && bytes.Equal(backup, original) && string(manifest) == filepath.Base(path)+":"+checksumOpenCode(original), "real binary plain enable is not restorable: exit=%d output=%s", code, output)
+		code, output = run("rollback", "--confirm")
+		restored, _ := os.ReadFile(path)
+		check(t, code == 0 && bytes.Equal(restored, original), "real binary rollback bytes differ: exit=%d output=%s", code, output)
+		t.Logf("real binary enable -> rollback restored %d bytes with checksum %s", len(restored), checksumOpenCode(restored))
+	})
 }
 
 func TestOpenCodeMigrationRollbackAndMissingBackup(t *testing.T) {

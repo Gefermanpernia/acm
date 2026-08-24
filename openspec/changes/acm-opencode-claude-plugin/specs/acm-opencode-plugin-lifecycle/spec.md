@@ -8,7 +8,7 @@ Manage opt-in installation, migration, and rollback of the bundled experimental 
 
 ### Requirement: Bundled Experimental Opt-In
 
-The ACM distribution MUST bundle the plugin but MUST keep it experimental and disabled until explicit user opt-in. It MUST NOT automatically replace a stable or upstream plugin.
+The ACM distribution MUST bundle the plugin but MUST keep it experimental and disabled until explicit user opt-in. It MUST NOT automatically replace a stable or upstream plugin. The installer and lifecycle command MUST resolve the bundled entry point from `ACM_SHARE_DIR/opencode/index.js` when `ACM_SHARE_DIR` is set, then use `$HOME/.local/share/acm/opencode/index.js` only when the override is unset. If the override is set but its entry point is missing or is not a regular file, the lifecycle command MUST fail closed without falling back to the default path or changing the OpenCode configuration.
 
 #### Scenario: Fresh ACM installation
 
@@ -21,6 +21,18 @@ The ACM distribution MUST bundle the plugin but MUST keep it experimental and di
 - GIVEN a compatible Linux installation and explicit opt-in
 - WHEN guided installation completes successfully
 - THEN ACM MAY enable the experimental plugin.
+
+#### Scenario: Custom share installation remains enable-able
+
+- GIVEN the installer staged the plugin under an explicit `ACM_SHARE_DIR`
+- WHEN the user explicitly enables the experiment with the same environment
+- THEN the lifecycle command SHALL configure and load that staged entry point.
+
+#### Scenario: Configured custom share entry point is missing
+
+- GIVEN `ACM_SHARE_DIR` is set but its plugin entry point is missing or unsafe
+- WHEN the user explicitly enables the experiment
+- THEN the lifecycle command MUST fail without using the default share path or changing the OpenCode configuration.
 
 ### Requirement: Guided Exclusive Migration
 

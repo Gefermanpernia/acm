@@ -34,7 +34,7 @@ After a profile transition, the plugin MUST NOT replay the failed request, resum
 
 ### Requirement: Bounded Logical-Operation Attempts
 
-Across successive OpenCode retries, ACM MUST ensure each eligible profile is attempted at most once for the logical operation according to ACM ordering and cooldowns. Concurrent transitions MUST serialize per profile and reject stale generations.
+Across successive OpenCode retries, ACM MUST ensure each eligible profile is attempted at most once for the logical operation according to ACM ordering and cooldowns. Concurrent transitions MUST serialize per profile. Stale non-replay transitions MUST be rejected. ACM MAY accept a stale submitted generation only for a same-operation, same-profile ledger replay; it MUST return the current generation and MUST return before state persistence.
 
 #### Scenario: Multiple OpenCode retries consume candidates
 
@@ -45,8 +45,10 @@ Across successive OpenCode retries, ACM MUST ensure each eligible profile is att
 #### Scenario: Concurrent stale transition arrives
 
 - GIVEN another OpenCode instance already advanced a profile generation
-- WHEN a stale exhaustion transition is submitted
-- THEN ACM MUST reject it without overwriting the newer state.
+- WHEN a stale exhaustion transition is submitted and the same profile is not already exhausted in the same operation ledger record
+- THEN ACM MUST reject it without overwriting the newer state
+- BUT WHEN the stale submission is a same-operation, same-profile ledger replay
+- THEN ACM MAY accept it only by returning the current generation before state persistence.
 
 ### Requirement: No Eligible Profile Outcome
 

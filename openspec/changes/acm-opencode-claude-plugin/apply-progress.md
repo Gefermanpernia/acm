@@ -5,8 +5,8 @@
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
 - Delivery: `auto-chain` / `feature-branch-chain`
-- Current slice: R11 `Local Auth Error Containment` (`feat/opencode-plugin-r11-auth-error-containment`)
-- Parent: `feat/opencode-plugin-r10-outcome-durability` under `feature-branch-chain`
+- Current slice: R16 `Replay-Exception Contract` (`feat/opencode-plugin-r16-replay-contract`)
+- Parent: `feat/opencode-plugin-r15-doctor-visibility` at `2ce929e` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -568,3 +568,127 @@ None.
 
 ## Round-4 Remediation Chain Status
 54/54 planned tasks complete. R7–R11 close contract coherence, distribution integrity, guided migration, machine outcome/durability, and local auth error containment. W4 non-corrupting idempotency was deliberately not planned for this chain and remains outside its remediation scope.
+
+## R12 Restorable Plain Opt-In
+- [x] 17.1 Added no-upstream JSONC and real compiled-binary JSON paths that require an exact checksummed backup, preserve the existing-backup guard, and restore byte-identical configuration on rollback.
+- [x] 17.2 Restored one unconditional backup transaction before every successful enable write and documented rollback availability for plain opt-in and explicit upstream replacement.
+- [x] 17.3 Kept conflict, checksum, ambiguity, post-write restoration, cleanup, and exit behavior unchanged; reran the focused, lifecycle, real-binary, Go, Node, formatting, vet, and diff checks.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 17.1 | `opencode_lifecycle_test.go` | Filesystem transaction + compiled binary | Existing lifecycle suite passed 4/4 before edits (`go test -count=1 -run '^TestOpenCodeMigration' .`) | Required focused command exited 1 because plain enable created neither `opencode.jsonc.acm-backup` nor the manifest | Implemented by 17.2; required focused command passed | In-process JSONC and real-binary JSON paths both verify exact backup bytes, manifest checksum, rollback byte equality, and cleanup | Shared lifecycle setup now isolates HOME, ACM_DIR, config, bin, share, and plugin paths under `t.TempDir()` |
+| 17.2 | `opencode_lifecycle.go`, `README.md` | Config transaction + user guidance | 17.1 RED captured before production edits | Plain enable wrote the config while leaving no rollback artifacts | Required focused command passed in `17.538s`; README now documents both restorable routes | Existing replacement tests and the new plain-enable tests exercise both branches through the same transaction | Backup and manifest writes execute once after the existing-backup guard and before the config write |
+| 17.3 | Lifecycle suite | Approval/refactor | Focused GREEN passed before isolation and guard strengthening | N/A: behavior-preserving refactor used the passing 17.1 suite; no artificial RED | All focused and regression commands passed | Second enable must return exit 2 with `ya existe un respaldo` while preserving config, backup, and manifest bytes; conflict and invalid-backup paths remain distinct | Diff review confirms only backup reachability, isolated lifecycle tests, rollback documentation, and SDD metadata changed |
+
+### R12 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -count=1 -run '^TestOpenCodeMigration(PlainEnableCreatesRestorableBackup|RollbackAndMissingBackup)$' .` → exit 0; package `17.538s` |
+| RED evidence | Same command before production changes → exit 1; `plain enable backup = "", err = ... opencode.jsonc.acm-backup: no such file or directory` |
+| Runtime harness | `go test -count=1 -v -run '^TestOpenCodeMigrationPlainEnableCreatesRestorableBackup$' .` built the real `acm`, ran plain `enable --confirm`, verified backup + manifest, ran `rollback --confirm`, and restored exactly 54 bytes with SHA-256 `1699ac0e251ff28ea53a07ad47734c28369f8512cc2d31a49571f53f1d08abcc`; exit 0 |
+| Lifecycle regression | `go test -count=1 -v -run '^TestOpenCodeMigration' .` → exit 0; 5/5 top-level tests passed in `26.412s`, including ambiguity/post-write cleanup, conflict/checksum, real replacement, plain enable, and missing backup |
+| Full Go suite | `go test -count=1 ./...` → exit 0; package `30.783s` |
+| Full Node suite | Final isolated run of `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `1712.169022ms` after priming the same temporary Go build cache |
+| Node flake disclosure | Two preceding cold-cache isolated runs hit the known 200 ms `machine-process.test.js` subprocess timeout (28/29, then 27/29); no Node source changed, and the final exact command passed with an isolated warmed cache |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | Every runtime command used `env -i` plus a fresh `/tmp/opencode/acm-r12-*` root. Tests additionally used `t.TempDir()` for HOME, ACM_DIR, config, bin, share, plugin, TMPDIR, GOCACHE, binary, backup, and manifest paths. No real OpenCode config, ACM state, profile, credential, binary, or plugin path was addressed; each shell sandbox was trap-removed. |
+| Review budget | Production/test/docs delta: 84 additions + 11 deletions = **95/190 changed lines** |
+| Rollback boundary | Revert only the unconditional backup transaction in `opencode_lifecycle.go`, R12 additions/isolation in `opencode_lifecycle_test.go`, the plain-opt-in rollback sentence in `README.md`, and Phase 17 metadata. R7–R11 behavior remains intact. |
+
+## Round-5 Remediation Chain Status
+63/69 planned tasks complete. R12 closes C1(R5), R13 closes W1, and R14 closes W2 with a cross-document compatibility guard. R15–R16 remain pending and were not started.
+
+## R13 Custom-Share Installation Capability
+- [x] 18.1 Replaced the installer fixture binary with a real isolated build and captured the expected RED: install succeeded under a custom `ACM_SHARE_DIR`, then lifecycle enable exited 2 because it searched the default share.
+- [x] 18.2 Made lifecycle discovery use `ACM_SHARE_DIR/opencode/index.js` before the default share, amended the lifecycle spec in the same slice, and documented the override and fail-closed behavior.
+- [x] 18.3 Kept install, seven-asset staging, enabled-path ESM loading, byte-exact rollback, failed-stage preservation, missing-custom-share rejection, host canaries, and sandbox deletion in one offline harness.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 18.1 | `integrations/opencode/test/install.test.js` | Offline installer + compiled-binary E2E | Existing installer harness passed 1/1 in `199.185098ms`; lifecycle suite passed | Exit 1 after `12.788s`: install staged seven assets, but real `acm opencode enable --confirm` returned exit 2 with `el adaptador OpenCode de ACM no está instalado` | Implemented by 18.2; focused harness passed 1/1 | Custom share path is asserted from the enabled config and imported as the real staged ESM entry point | Real release binary replaced the fake lifecycle command; the network boundary remains fake `curl` |
+| 18.2 | `opencode_lifecycle.go`, lifecycle spec, `README.md` | Lifecycle path resolution + contract | 18.1 RED captured before production/spec edits | Lifecycle ignored the installer-owned override | Focused harness passed with install 0, enable 0, hooks `auth,chat.headers`, rollback 0 | Set-and-present custom share succeeds; set-but-missing custom share fails without default fallback or config mutation | Explicit plugin-path override remains highest priority; `ACM_SHARE_DIR` only replaces the prior default branch |
+| 18.3 | `install.test.js` | Approval/refactor + safety | Focused GREEN passed 1/1 in `12.802s` before final isolation assertions | N/A: behavior-preserving refactor used the passing 18.1 harness; no artificial RED | Final focused harness passed 1/1 in `10.892s` | Missing custom entry point is tested while a valid default entry exists, proving fail-closed resolution; rejected `quota.js` staging preserves the seven installed assets byte-for-byte | Diff review confirmed only custom-share discovery, its same-slice contract/docs, and the isolated harness changed; no out-of-scope behavior was altered |
+
+### R13 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/install.test.js` → exit 0; 1/1 passed in `10.891848637s` |
+| RED evidence | Same command before production changes → exit 1; actual exit 2 versus expected 0; stderr was exactly scoped to `acm: el adaptador OpenCode de ACM no está instalado` |
+| Runtime harness | Offline real `sh install.sh` returned 0, staged exactly seven assets under a custom share, real compiled `acm` enable returned 0, enabled URL was `file:///tmp/acm-install-*/installed-share/opencode/index.js`, that staged module loaded hooks `auth,chat.headers`, rollback returned 0 and restored 29 exact bytes, and a missing custom share returned 2 without default fallback or config mutation |
+| Lifecycle regressions | `go test -count=1 -v -run '^TestOpenCodeMigration(RealBinaryRequiresExplicitReplacement|PlainEnableCreatesRestorableBackup)$' .` → exit 0; R9 conflict/replacement passed and R12 real enable→rollback restored 54 bytes with SHA-256 `1699ac0e251ff28ea53a07ad47734c28369f8512cc2d31a49571f53f1d08abcc` |
+| Full Go | `go test -count=1 ./...` → exit 0; package `28.129s` |
+| Full Node | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `11.274389097s`; no cold-cache timeout occurred after the Go cache prime |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | The harness uses fresh temporary HOME, ACM_DIR, ACM_SHARE_DIR, bin, OpenCode config, TMPDIR, GOCACHE, GOMODCACHE, and build roots; `GOPROXY=off`; fake `curl` serves repository/release bytes; simulated host aliases, credentials, config, default targets, and a custom-share target remain byte-identical; cleanup proves the root is absent |
+| Review budget | Product/test/docs/spec delta before OpenSpec delivery metadata: 105 additions + 23 deletions = **128/300 changed lines**; complete slice including OpenSpec delivery metadata is 138 additions + 29 deletions = **167 changed lines** |
+| Diff/refactor review | The complete 18.3 diff preserves the installer seven-asset list and atomic staging, R9 explicit replacement/conflict behavior, R12 unconditional backup + exact rollback, exit taxonomy, and all adapter/machine behavior; no out-of-scope behavior changed |
+| Rollback boundary | Revert only custom-share resolution in `opencode_lifecycle.go`, the R13 `install.test.js` harness additions, lifecycle-spec override scenarios, README override guidance, and Phase 18 metadata. R8 distribution, R9 migration, R12 backup reachability, and all machine/adapter behavior remain intact. |
+
+## R14 Compatibility Documentation Coherence
+- [x] 19.1 Added a README matrix-absence RED while retaining successful missing and non-exact Claude CLI factory loads.
+- [x] 19.2 Replaced the stale matrix with ADR 0001's package-range and diagnostic-only CLI policy in Spanish user guidance.
+- [x] 19.3 Centralized package, README, ADR, and auth R3 assertions and diff-read the refactor without finding out-of-scope behavior changes.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 19.1 | `contract-coherence.test.js` | Contract + factory | Existing 2/2 passed | Focused exit 1; README matched the removed exact matrix | Implemented by 19.2; 2/2 passed | Non-exact `9.9.9` and missing CLI evidence both still load | Matrix absence now belongs to the shared policy guard |
+| 19.2 | `README.md` | User guidance | 19.1 RED captured | README contradicted ADR 0001 and auth R3 | Focused 2/2 passed after the minimal prose replacement | Package range and diagnostic-only CLI behavior are both explicit | No policy or runtime code changed |
+| 19.3 | `contract-coherence.test.js` | Approval/refactor | Focused GREEN passed 2/2 | N/A: behavior-preserving assertion refactor | Final focused 2/2 and full Node 29/29 passed | README, ADR, spec, package, missing CLI, and non-exact CLI boundaries remain distinct | Diff review confirmed only R14 documentation coherence and its guard changed |
+
+### R14 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test and RED | `node --test integrations/opencode/test/contract-coherence.test.js`: baseline 2/2; RED 1/2 with `README.md` matching the removed matrix; final 2/2 in `187.956228ms` |
+| Runtime harness | The focused offline factory loaded hooks `auth,chat.headers` with CLI `9.9.9` and loaded Anthropic auth with missing CLI evidence; controlled process evidence only, no machine, credential, config, or network access |
+| Regression and isolation | Isolated `go test -count=1 ./...` passed in `42.640s`; after one known 200 ms cold/concurrent subprocess-timeout flake (28/29), a warmed full Node rerun passed 29/29 in `22.128692081s`; formatting, vet, and diff checks were clean; all HOME/ACM/config/share/cache paths were temporary and removed |
+| Review and rollback | Product/test/docs: 26 additions + 10 deletions = **36/70**; complete slice with OpenSpec metadata: 52 additions + 16 deletions = **68/70 changed lines**. Revert only the README policy sentence, centralized coherence assertions, and Phase 19 metadata; R12, R13, exit taxonomy, runtime behavior, and later slices remain untouched. |
+
+## R15 Doctor Legacy Visibility
+- [x] 20.1 Added available/unavailable diagnostics RED cases requiring the exact state line, delegated profile visibility, preserved aggregates, and negative controls for profile, lease, and identity disclosure.
+- [x] 20.2 Restored `estado : <ACM_DIR>` and `cmdLs` delegation while retaining diagnostics; doctor uses the existing diagnostic redaction path and suppresses profile identities, while `acm ls` remains unchanged.
+- [x] 20.3 Proved the compiled command with isolated synthetic profiles and fake tools, reran every regression gate, and diff-read the complete refactor without finding out-of-scope behavior changes.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 20.1 | `main_test.go` | Command/filesystem | Existing doctor test passed 1/1 | Focused exit 1; both cases lacked `estado` and the profile listing | Implemented by 20.2; focused passed | Available and corrupt-state paths; aggregate and redaction controls | Shared stdout capture and fake-tool fixture |
+| 20.2 | `main.go` | CLI composition | 20.1 RED captured | R4a returned before legacy visibility | Focused exit 0 | Diagnostics success and unavailable branches both delegate | Normal `acm ls` keeps identifiers; doctor requests redaction |
+| 20.3 | Same | Compiled-binary approval | Focused GREEN passed | N/A: behavior-preserving proof/refinement | Final focused, full Go, and Node suites passed | Real binary showed two synthetic profiles without raw identifiers | Diff review found no out-of-scope behavior change |
+
+### R15 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused / RED | `go test -count=1 -run '^TestDoctor' .`: baseline exit 0; RED exit 1 on both missing state/listing cases; final exit 0 in `0.026s` |
+| Runtime harness | Compiled `acm doctor` under temp HOME/ACM_DIR/bin/cache with fake Claude/Codex showed the exact state line, `oauth.refresh.failed: 1`, and two `unknown disponible` profile rows; raw synthetic profiles/tokens were absent |
+| Full regressions | `go test -count=1 ./...` exit 0 in `28.704s`; warmed Node suite 29/29 in `12042.755947ms`; `gofmt -l .`, `go vet ./...`, and `git diff --check` exited 0 with no output |
+| Diff / rollback | Product and tests are 110 changed lines within the 150-line budget. Revert only R15 changes in `main.go`, `main_test.go`, and Phase 20 metadata; R4a aggregates and R8–R14 behavior remain intact. |
+
+## Round-5 Remediation Chain Status
+66/69 tasks complete. R15 closes W3; R16 remains pending and was not started.
+
+## R16 Replay-Exception Contract
+- [x] 21.1 Added a document-coherence RED and a passing real-binary characterization of the existing ledger replay and stale non-replay paths.
+- [x] 21.2 Narrowed failover R7 S2 and documented the same-operation, same-profile replay exception without changing machine behavior.
+- [x] 21.3 Aligned replay terminology, proved current-generation/no-write behavior, reran regressions, and diff-read the slice with no out-of-scope behavior change.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 21.1 | `test/{contract-coherence,machine-contract}.test.js` | Contract + compiled binary | Focused baseline 3/3 | Exit 1; coherence failed only because spec lacked the replay exception, while the binary trace passed | Implemented by 21.2; focused 3/3 | Same-operation/profile replay and stale non-replay paths | No behavioral failure was invented |
+| 21.2 | Failover spec + `design.md` | Specification/design contract | 21.1 RED captured | Spec and design contradicted the ledger replay order | Focused 3/3 | Replay is accepted only for the bound operation/profile; stale non-replay is rejected | Exact exception sentence is shared |
+| 21.3 | Same tests/docs | Approval/refactor | Focused GREEN 3/3 | N/A: terminology-only refactor used the passing characterization | Final focused 3/3; regressions green | Replay returned generation 3 from stale 2 with no state write; non-replay exited 75 | Diff review found no out-of-scope behavior change |
+
+### R16 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused / RED / GREEN | Required isolated command: baseline 3/3; RED 2/3 with `/Stale non-replay transitions MUST be rejected/` absent while the real-binary case passed; GREEN 3/3; final 3/3 in `24035.302225ms` |
+| Runtime harness | Built `acm` under temporary HOME/ACM_DIR/TMPDIR/GOCACHE; matching ledger replay returned exit 0, stale generation 2 → current generation 3, unchanged bytes and inode while state-directory persistence was disabled; stale non-replay returned exit 75 `stale_generation` with unchanged state |
+| Full regressions | `go test -count=1 ./...` exit 0 in `46.117s`; exact warmed Node suite passed 29/29 in `18731.005069ms`; `gofmt -l .`, `go vet ./...`, and `git diff --check` exited 0 with no output |
+| Known environment flake | Later exact Node reruns hit the pre-existing 200 ms subprocess timeout (28/29, then 26/29 after cache priming); isolated `machine-process.test.js` passed 7/7 in `1097.962053ms`. No timeout change was attempted in R16. |
+| Diff / rollback | Complete slice: 77 additions + 12 deletions = **89/100 changed lines**. Revert only failover R7 S2, the replay paragraph in `design.md`, two Node contract additions, and Phase 21 metadata; `machine.go` and runtime behavior remain unchanged. |
+
+## Completed Round-5 Remediation Chain
+69/69 tasks complete. Planned findings C1(R5), W1, W2, W3, W5, and coverage warning W6 are closed; S3 closed with R13. Historical evidence warning W4 and suggestions S1, S2, S4, and S5 remain outside the approved R12–R16 scope. No merge-blocking or planned chain finding remains open.

@@ -54,8 +54,12 @@ func enableOpenCode(home string, replaceUpstream bool) error {
 	}
 	plugin := os.Getenv("ACM_OPENCODE_PLUGIN_PATH")
 	if plugin == "" {
-		h, _ := os.UserHomeDir()
-		plugin = filepath.Join(h, ".local", "share", "acm", "opencode", "index.js")
+		share := os.Getenv("ACM_SHARE_DIR")
+		if share == "" {
+			h, _ := os.UserHomeDir()
+			share = filepath.Join(h, ".local", "share", "acm")
+		}
+		plugin = filepath.Join(share, "opencode", "index.js")
 	}
 	info, err := os.Lstat(plugin)
 	if err != nil || !info.Mode().IsRegular() {
@@ -92,14 +96,12 @@ func enableOpenCode(home string, replaceUpstream bool) error {
 	if _, err = os.Lstat(manifest); !os.IsNotExist(err) {
 		return fmt.Errorf("ya existe un respaldo; revierte antes de habilitar")
 	}
-	if replaceUpstream {
-		rollback, _ := editOpenCode(original, pluginURL, false)
-		record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
-		if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
-			os.Remove(backup)
-			os.Remove(manifest)
-			return fmt.Errorf("no se pudo crear el respaldo")
-		}
+	rollback, _ := editOpenCode(original, pluginURL, false)
+	record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
+	if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
+		os.Remove(backup)
+		os.Remove(manifest)
+		return fmt.Errorf("no se pudo crear el respaldo")
 	}
 	if err = atomicWriteMachineFile(path, updated); err == nil {
 		current, readErr := readOpenCode(path)

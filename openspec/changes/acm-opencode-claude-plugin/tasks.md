@@ -184,26 +184,26 @@ Chain strategy: feature-branch-chain
 Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base = R13 branch; R15 base = R14 branch; R16 base = R15 branch. Retarget/rebase any polluted child diff.
 
 ## Phase 17: Restorable Plain Opt-In (R12; C1(R5))
-- [ ] 17.1 **RED**: in `opencode_lifecycle_test.go`, add no-upstream plain-enable tests that fail without manifest/backup, then prove real compiled `acm` enable→rollback restores original bytes under temp HOME, ACM_DIR, config, bin, and plugin paths.
-- [ ] 17.2 **GREEN**: make `opencode_lifecycle.go` create the checksummed backup and manifest before every config-mutating enable; update `README.md` so plain opt-in documents rollback availability.
-- [ ] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
+- [x] 17.1 **RED**: in `opencode_lifecycle_test.go`, add no-upstream plain-enable tests that fail without manifest/backup, then prove real compiled `acm` enable→rollback restores original bytes under temp HOME, ACM_DIR, config, bin, and plugin paths.
+- [x] 17.2 **GREEN**: make `opencode_lifecycle.go` create the checksummed backup and manifest before every config-mutating enable; update `README.md` so plain opt-in documents rollback availability.
+- [x] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
 
 ## Phase 18: Custom-Share Installation Capability (R13; W1)
-- [ ] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.
-- [ ] 18.2 **GREEN**: amend `specs/acm-opencode-plugin-lifecycle/spec.md` for the shared override; make `opencode_lifecycle.go` resolve `ACM_SHARE_DIR` before its default plugin path and document it in `README.md`.
-- [ ] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
+- [x] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.
+- [x] 18.2 **GREEN**: amend `specs/acm-opencode-plugin-lifecycle/spec.md` for the shared override; make `opencode_lifecycle.go` resolve `ACM_SHARE_DIR` before its default plugin path and document it in `README.md`.
+- [x] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
 
 ## Phase 19: Compatibility Documentation Coherence (R14; W2)
-- [ ] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.
-- [ ] 19.2 **GREEN**: replace the matrix claim in `README.md` with ADR 0001's package-range and diagnostic-only CLI policy.
-- [ ] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
+- [x] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.
+- [x] 19.2 **GREEN**: replace the matrix claim in `README.md` with ADR 0001's package-range and diagnostic-only CLI policy.
+- [x] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
 
 ## Phase 20: Doctor Legacy Visibility (R15; W3)
-- [ ] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.
-- [ ] 20.2 **GREEN**: restore the state line and profile listing in `main.go` without removing diagnostic aggregates or leaking lease/profile identifiers.
-- [ ] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
+- [x] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.
+- [x] 20.2 **GREEN**: restore the state line and profile listing in `main.go` without removing diagnostic aggregates or leaking lease/profile identifiers.
+- [x] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
 
 ## Phase 21: Replay-Exception Contract (R16; W5)
-- [ ] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
-- [ ] 21.2 **GREEN**: narrow failover R7 S2 to reject stale non-replay transitions while allowing only same-operation/profile ledger replays that return current generation before persistence; document this in `design.md`.
-- [ ] 21.3 **REFACTOR**: align terms across spec/design/tests and rerun the offline contract plus real-binary no-write replay proof.
+- [x] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
+- [x] 21.2 **GREEN**: narrow failover R7 S2 to reject stale non-replay transitions while allowing only same-operation/profile ledger replays that return current generation before persistence; document this in `design.md`.
+- [x] 21.3 **REFACTOR**: align terms across spec/design/tests and rerun the offline contract plus real-binary no-write replay proof.

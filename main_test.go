@@ -9,27 +9,57 @@ import (
 	"time"
 )
 
-func TestDoctorReportsRedactedAdapterDiagnosticsAndLeaseHealth(t *testing.T) {
-	setupMachineV1Test(t)
-	oldOrder := toolOrder
-	toolOrder = nil
-	t.Cleanup(func() { toolOrder = oldOrder })
-	state := machineState{
-		Diagnostics: []machineDiagnostic{{Time: time.Now().UnixMilli(), Component: "oauth", Event: "refresh", Outcome: "failed", Retryable: false}},
-		Leases:      []machineLease{{ID: "private-lease-identifier", Profile: "private-profile", ExpiresAt: time.Now().Add(time.Minute).Unix()}},
+func TestDoctorRestoresStateAndRedactedProfileVisibility(t *testing.T) {
+	for _, test := range []struct {
+		name, diagnostic string
+		unavailable      bool
+	}{
+		{"available diagnostics", "opencode diagnostics: 1; active leases: 1", false},
+		{"unavailable diagnostics", "opencode diagnostics: unavailable", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := "private-profile-identifier"
+			setupMachineV1Test(t, profile)
+			oldOrder := toolOrder
+			toolOrder = []string{"claude"}
+			t.Cleanup(func() { toolOrder = oldOrder })
+			fake := filepath.Join(t.TempDir(), "claude")
+			check(t, os.WriteFile(fake, []byte("#!/bin/sh\nprintf 'fake 1.0\\n'\n"), 0o700) == nil, "create fake tool")
+			t.Setenv("ACM_BIN_claude", fake)
+			check(t, os.WriteFile(filepath.Join(profilePath(tools["claude"], profile), ".claude.json"), []byte(`{"emailAddress":"private@example.test"}`), 0o600) == nil, "seed private identity")
+			check(t, os.MkdirAll(stateDir, 0o755) == nil, "create state directory")
+			if test.unavailable {
+				check(t, os.WriteFile(machineStateFile(), []byte("invalid"), 0o600) == nil, "seed invalid state")
+			} else {
+				state := machineState{
+					Diagnostics: []machineDiagnostic{{Time: time.Now().UnixMilli(), Component: "oauth", Event: "refresh", Outcome: "failed"}},
+					Leases:      []machineLease{{ID: "private-lease-identifier", Profile: profile, ExpiresAt: time.Now().Add(time.Minute).Unix()}},
+				}
+				check(t, saveMachineState(state) == nil, "seed doctor state")
+			}
+			text, code := captureStdout(t, cmdDoctor)
+			check(t, code == 0 && strings.Contains(text, "estado : "+acmDir) && strings.Contains(text, test.diagnostic), "doctor output: %s", text)
+			check(t, test.unavailable || strings.Contains(text, "oauth.refresh.failed: 1"), "doctor omitted diagnostic aggregate: %s", text)
+			check(t, strings.Contains(text, "unknown") && strings.Contains(text, "disponible"), "doctor omitted redacted profile listing: %s", text)
+			for _, private := range []string{profile, "private-lease-identifier", "private@example.test"} {
+				check(t, !strings.Contains(text, private), "doctor leaked %q: %s", private, text)
+			}
+		})
 	}
-	check(t, os.MkdirAll(stateDir, 0o755) == nil && saveMachineState(state) == nil, "seed doctor state")
+}
+
+func captureStdout(t *testing.T, run func() int) (string, int) {
+	t.Helper()
 	reader, writer, err := os.Pipe()
 	check(t, err == nil, "pipe: %v", err)
 	oldStdout := os.Stdout
 	os.Stdout = writer
-	code := cmdDoctor()
-	writer.Close()
+	code := run()
+	check(t, writer.Close() == nil, "close output")
 	os.Stdout = oldStdout
-	output, _ := io.ReadAll(reader)
-	text := string(output)
-	check(t, code == 0 && strings.Contains(text, "opencode diagnostics: 1; active leases: 1") && strings.Contains(text, "oauth.refresh.failed: 1"), "doctor output: %s", text)
-	check(t, !strings.Contains(text, acmDir) && !strings.Contains(text, "private-lease") && !strings.Contains(text, "private-profile"), "doctor leaked private state: %s", text)
+	output, err := io.ReadAll(reader)
+	check(t, err == nil, "read output: %v", err)
+	return string(output), code
 }
 
 func TestLoginRecoversOnlySuccessfulClaudeProfile(t *testing.T) {

@@ -531,7 +531,8 @@ func cmdInit() int {
 	return cmdLs()
 }
 
-func cmdLs() int {
+func cmdLs(redactProfileIdentifiers ...bool) int {
+	redact := len(redactProfileIdentifiers) > 0 && redactProfileIdentifiers[0]
 	for _, name := range toolOrder {
 		t := tools[name]
 		bin, err := exec.LookPath(binFor(t))
@@ -546,6 +547,10 @@ func cmdLs() int {
 		}
 		cur := getCurrent(t)
 		for _, p := range ps {
+			displayName := p
+			if redact {
+				displayName = safeDiagnostic(p)
+			}
 			mark := " "
 			if p == cur {
 				mark = "*"
@@ -553,17 +558,20 @@ func cmdLs() int {
 			var stat string
 			switch {
 			case !loggedIn(t, p):
-				stat = fmt.Sprintf("sin login → acm login %s %s", t.name, p)
+				stat = fmt.Sprintf("sin login → acm login %s %s", t.name, displayName)
 			case inCooldown(t, p):
 				stat = "límite alcanzado, libre a las " + fmtEpoch(cooldownUntil(t, p))
 			default:
 				stat = "disponible"
 			}
-			id := identityOf(t, p)
+			id := ""
+			if !redact {
+				id = identityOf(t, p)
+			}
 			if id != "" {
 				id = "  [" + id + "]"
 			}
-			fmt.Printf(" %s %-12s %s%s\n", mark, p, stat, id)
+			fmt.Printf(" %s %-12s %s%s\n", mark, displayName, stat, id)
 		}
 	}
 	return 0
@@ -579,27 +587,29 @@ func cmdDoctor() int {
 		fmt.Printf("%-7s %s\n", t.name+":", v)
 	}
 	fmt.Printf("acm    : v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+	fmt.Println("estado : " + acmDir)
 	fmt.Printf("cooldown por defecto: %dm\n", defaultCooldownMin)
 	state, err := loadMachineState()
 	if err != nil {
 		fmt.Println("opencode diagnostics: unavailable")
-		return 0
+	} else {
+		diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
+		fmt.Printf("opencode diagnostics: %d; active leases: %d\n", len(diagnostics), active)
+		counts := make(map[string]int)
+		for _, event := range diagnostics {
+			counts[event.Component+"."+event.Event+"."+event.Outcome]++
+		}
+		keys := make([]string, 0, len(counts))
+		for key := range counts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Printf("  %s: %d\n", key, counts[key])
+		}
 	}
-	diagnostics, active := machineDiagnosticSnapshot(state, time.Now())
-	fmt.Printf("opencode diagnostics: %d; active leases: %d\n", len(diagnostics), active)
-	counts := make(map[string]int)
-	for _, event := range diagnostics {
-		counts[event.Component+"."+event.Event+"."+event.Outcome]++
-	}
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Printf("  %s: %d\n", key, counts[key])
-	}
-	return 0
+	fmt.Println()
+	return cmdLs(true)
 }
 
 func seedProfile(t *tool, dst string) {
