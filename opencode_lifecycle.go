@@ -19,8 +19,9 @@ const openCodeManifest = ".acm-opencode-backup.json"
 func cmdOpenCode(args []string) int { return runOpenCodeLifecycle(args, os.Stdout, os.Stderr) }
 
 func runOpenCodeLifecycle(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 2 || args[1] != "--confirm" {
-		fmt.Fprintln(stderr, "acm: usa 'acm opencode enable|rollback --confirm'")
+	replaceUpstream := len(args) == 3 && args[0] == "enable" && args[1] == "--confirm" && args[2] == "--replace-upstream"
+	if !replaceUpstream && (len(args) != 2 || args[1] != "--confirm") {
+		fmt.Fprintln(stderr, "acm: usa 'acm opencode enable --confirm [--replace-upstream]' o 'acm opencode rollback --confirm'")
 		return 2
 	}
 	home := os.Getenv("ACM_OPENCODE_CONFIG_HOME")
@@ -33,7 +34,7 @@ func runOpenCodeLifecycle(args []string, stdout, stderr io.Writer) int {
 	}
 	var err error
 	if args[0] == "enable" {
-		err = enableOpenCode(home)
+		err = enableOpenCode(home, replaceUpstream)
 	} else if args[0] == "rollback" {
 		err = rollbackOpenCode(home)
 	} else {
@@ -47,7 +48,7 @@ func runOpenCodeLifecycle(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func enableOpenCode(home string) error {
+func enableOpenCode(home string, replaceUpstream bool) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("la integración OpenCode solo admite Linux")
 	}
@@ -70,20 +71,35 @@ func enableOpenCode(home string) error {
 	if err != nil {
 		return err
 	}
+	upstream, acm, err := detectOpenCodePlugins(original, pluginURL)
+	if err != nil {
+		return fmt.Errorf("configuración JSON/JSONC ambigua o inválida")
+	}
+	if upstream && !replaceUpstream {
+		if acm {
+			return fmt.Errorf("conflicto de plugins; revisa la configuración y repite con --replace-upstream")
+		}
+		return fmt.Errorf("la migración requiere --replace-upstream")
+	}
+	if replaceUpstream && !upstream {
+		return fmt.Errorf("no existe un plugin upstream que reemplazar")
+	}
 	updated, err := editOpenCode(original, pluginURL, true)
 	if err != nil || !validateOpenCode(updated, pluginURL) {
 		return fmt.Errorf("configuración JSON/JSONC ambigua o inválida")
 	}
-	rollback, _ := editOpenCode(original, pluginURL, false)
 	manifest, backup := filepath.Join(home, openCodeManifest), path+".acm-backup"
 	if _, err = os.Lstat(manifest); !os.IsNotExist(err) {
 		return fmt.Errorf("ya existe un respaldo; revierte antes de habilitar")
 	}
-	record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
-	if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
-		os.Remove(backup)
-		os.Remove(manifest)
-		return fmt.Errorf("no se pudo crear el respaldo")
+	if replaceUpstream {
+		rollback, _ := editOpenCode(original, pluginURL, false)
+		record := []byte(filepath.Base(path) + ":" + checksumOpenCode(rollback))
+		if atomicWriteMachineFile(backup, rollback) != nil || atomicWriteMachineFile(manifest, record) != nil {
+			os.Remove(backup)
+			os.Remove(manifest)
+			return fmt.Errorf("no se pudo crear el respaldo")
+		}
 	}
 	if err = atomicWriteMachineFile(path, updated); err == nil {
 		current, readErr := readOpenCode(path)
@@ -184,8 +200,7 @@ func editOpenCode(data []byte, pluginURL string, enable bool) ([]byte, error) {
 	}
 	result := plugins[:0]
 	for _, value := range plugins {
-		upstream := value == "opencode-anthropic-login-via-cli" || strings.HasPrefix(value, "opencode-anthropic-login-via-cli@")
-		acm := value == pluginURL || strings.HasSuffix(value, "/acm/opencode/index.js")
+		upstream, acm := classifyOpenCodePlugin(value, pluginURL)
 		if !acm && (!enable || !upstream) {
 			result = append(result, value)
 		}
@@ -207,6 +222,24 @@ func editOpenCode(data []byte, pluginURL string, enable bool) ([]byte, error) {
 		prefix = `"plugin":`
 	}
 	return append(append(append([]byte{}, data[:close]...), append([]byte(prefix), encoded...)...), data[close:]...), nil
+}
+
+func detectOpenCodePlugins(data []byte, pluginURL string) (upstream, acm bool, err error) {
+	_, plugins, _, err := parseOpenCode(data)
+	if err != nil {
+		return false, false, err
+	}
+	for _, value := range plugins {
+		isUpstream, isACM := classifyOpenCodePlugin(value, pluginURL)
+		upstream, acm = upstream || isUpstream, acm || isACM
+	}
+	return upstream, acm, nil
+}
+
+func classifyOpenCodePlugin(value, pluginURL string) (upstream, acm bool) {
+	upstream = value == "opencode-anthropic-login-via-cli" || strings.HasPrefix(value, "opencode-anthropic-login-via-cli@")
+	acm = value == pluginURL || strings.HasSuffix(value, "/acm/opencode/index.js")
+	return upstream, acm
 }
 
 func validEnabledOpenCode(data []byte, pluginURL string) bool {

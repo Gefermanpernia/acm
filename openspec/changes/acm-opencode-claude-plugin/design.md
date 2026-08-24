@@ -20,7 +20,7 @@ Replace the spike with a Linux-only bundled plugin. OpenCode 1.18.19 `SessionRet
        → confirmed quota → ACM exhaust → synthetic retry-compatible response
        → OpenCode SessionRetry → next fetch/selection
 
-`refresh.begin(profile,generation)` creates an expiring random lease. Busy leases fail before network. `refresh.commit` validates lease/profile/generation/expiry, atomically replaces `.credentials.json` at `0600`, fsyncs, increments generation, then removes the lease. `refresh.abort` releases it or quarantines classified `invalid_grant`. A crash after rotation but before commit can lose the new token; subsequent rejection requires `acm login`.
+`refresh.begin(profile,generation)` creates an expiring random lease. Busy leases fail before network. `refresh.commit` validates lease/profile/generation/expiry, atomically replaces `.credentials.json` at `0600`, fsyncs the file and parent directory, increments generation, then removes the lease. `refresh.abort` releases it or quarantines classified `invalid_grant`. A crash after rotation but before commit can lose the new token; subsequent rejection requires `acm login`.
 
 ## Interfaces / Contracts
 
@@ -29,6 +29,8 @@ Replace the spike with a Linux-only bundled plugin. OpenCode 1.18.19 `SessionRet
 Allowlisted profile names and canonical credential paths must remain beneath the profile root; reject symlink escape and non-regular targets.
 
 Confirmed quota requires 429 + typed `rate_limit_error` + rejected unified-quota headers. ACM generation-checks the transition and excludes profiles already recorded for the operation. Replacement available: plugin returns bounded 429 without provider `Retry-After`, prompting SessionRetry. Only cooling profiles: 429 with earliest-reset `Retry-After`. All quarantined: non-retryable 401 with `acm login` action and no retry header. Unconfirmed 401/429/529 pass through unchanged.
+
+Every other safe machine failure maps to `503` with its stable code preserved in the response body. Retryable contention and lease outcomes (`state_busy`, `lease_busy`, `invalid_lease`, `lease_expired`, and `stale_generation`) carry a bounded `Retry-After: 1`; the quota handler instead preserves the original provider response for `stale_generation`. Non-retryable outcomes (`no_available_profile` when no unattempted profile remains, `state_unavailable`, `unknown_operation`, `invalid_operation`, `invalid_profile_path`, `persistence_failed`, `invalid_request`, `unsupported_version`, `output_too_large`, `invalid_machine_response`, `machine_timeout`, and `machine_failed`) carry no retry header. Cooling and quarantine never use this 503 path: cooling remains 429 with reset metadata only when no replacement is selectable, and quarantine remains actionable 401.
 
 ## File Changes / Prototype Disposition
 

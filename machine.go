@@ -637,7 +637,15 @@ func atomicWriteMachineFile(path string, data []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	if err = os.Rename(temporary, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return machineSync(directory)
 }
 
 func withMachineState(fn func() error) error {

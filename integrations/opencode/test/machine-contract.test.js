@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -50,6 +51,13 @@ function assertAdapterFields(response, fields) {
   );
 }
 
+async function assertMapped(result, expected) {
+  const response = mapMachineResponse(result.response, expected.now);
+  assert.equal(response.status, expected.status);
+  assert.equal(response.headers.get("retry-after"), expected.retryAfter ?? null);
+  assert.deepEqual(await response.json(), expected.body);
+}
+
 test("characterizes every adapter machine operation against the real binary", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "acm-machine-contract-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -79,6 +87,10 @@ test("characterizes every adapter machine operation against the real binary", as
   assertAdapterFields(selected.response, { profile: "string", config_dir: "string", generation: "number" });
   const unavailable = invoke(binary, env, "credential.select", "a".repeat(64));
   assertError(unavailable, "credential.select", 69, "no_available_profile", false);
+  await assertMapped(unavailable, {
+    status: 503,
+    body: { code: "no_available_profile", outcome: "unavailable", retryable: false },
+  });
 
   const firstLease = invoke(binary, env, "oauth.refresh.begin", "b".repeat(64), {
     profile: "alpha", generation: selected.response.generation,
@@ -131,6 +143,69 @@ test("characterizes every adapter machine operation against the real binary", as
     outcome: "string", generation: "number", reset_at: "number", replacement_available: "boolean",
   });
   assert.equal(fullyExhausted.response.replacement_available, false);
+  await assertMapped(fullyExhausted, {
+    now: () => resetAt * 1000,
+    status: 429,
+    retryAfter: "10",
+    body: { outcome: "cooling", retryable: true },
+  });
+
+  await writeFile(statePath, JSON.stringify({ generation: 4, operations: [], quarantined: ["alpha"] }));
+  const beginQuarantined = invoke(binary, env, "oauth.refresh.begin", "6".repeat(64), {
+    profile: "alpha", generation: 4,
+  });
+  assertError(beginQuarantined, "oauth.refresh.begin", 69, "credential_quarantined", false);
+  await assertMapped(beginQuarantined, {
+    status: 401,
+    body: { action: "acm login", outcome: "quarantined", retryable: false },
+  });
+
+  const invalidLease = invoke(binary, env, "oauth.refresh.abort", "7".repeat(64), {
+    profile: "alpha", lease_id: "missing-lease", reason: "transient",
+  });
+  assertError(invalidLease, "oauth.refresh.abort", 75, "invalid_lease", true);
+
+  const unknownOperation = invoke(binary, env, "quota.exhaust", "8".repeat(64), {
+    profile: "alpha", generation: 4,
+  });
+  assertError(unknownOperation, "quota.exhaust", 2, "unknown_operation", false);
+  await assertMapped(unknownOperation, {
+    status: 503,
+    body: { code: "unknown_operation", outcome: "unavailable", retryable: false },
+  });
+
+  const invalidOperation = invoke(binary, env, "not.supported", "9".repeat(64));
+  assertError(invalidOperation, "not.supported", 2, "invalid_operation", false);
+  await assertMapped(invalidOperation, {
+    status: 503,
+    body: { code: "invalid_operation", outcome: "unavailable", retryable: false },
+  });
+
+  const lockPath = join(acmDir, "state", ".machine.lock");
+  const holder = spawn("flock", [lockPath, "sh", "-c", "printf ready; read value"], {
+    env, stdio: ["pipe", "pipe", "pipe"],
+  });
+  await once(holder.stdout, "data");
+  const busy = invoke(binary, env, "credential.select", "a0".repeat(32));
+  const holderExit = once(holder, "exit");
+  holder.stdin.end("release\n");
+  await holderExit;
+  assertError(busy, "credential.select", 75, "state_busy", true);
+  const retryMappings = await Promise.allSettled([
+    assertMapped(invalidLease, {
+      status: 503,
+      retryAfter: "1",
+      body: { code: "invalid_lease", outcome: "unavailable", retryable: true },
+    }),
+    assertMapped(busy, {
+      status: 503,
+      retryAfter: "1",
+      body: { code: "state_busy", outcome: "unavailable", retryable: true },
+    }),
+  ]);
+  assert.deepEqual(retryMappings.flatMap((result, index) => result.status === "rejected"
+    ? [`${["invalid_lease", "state_busy"][index]}: ${result.reason.actual} !== ${result.reason.expected}`]
+    : []), []);
 
   const recorded = invoke(binary, env, "diagnostics.record", "0".repeat(64), { component: profileDir, event: secrets[0], outcome: "private-identifier", retryable: true });
   assertContract(recorded, "diagnostics.record", { outcome: "string" });

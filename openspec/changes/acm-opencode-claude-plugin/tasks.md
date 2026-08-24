@@ -7,11 +7,11 @@
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 → PR 2 → PR 3 → PR 4 → PR 5 |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Work Units
@@ -60,11 +60,11 @@ Chain strategy: stacked-to-main
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | R1 → R2 → R3 → R4 |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 ### Remediation Work Units
@@ -124,36 +124,86 @@ Round-2 verification found that `machineQuotaResponse` always reports `outcome: 
 | Estimated changed lines | 780–960 across five PRs |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Delivery / chain | auto-chain / stacked-to-main |
+| Delivery / chain | auto-chain / feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: stacked-to-main
+Chain strategy: feature-branch-chain
 400-line budget risk: High
 
 Scope rule: slice by end-user capability and rollback boundary, including every producer and consumer; never exclude a consumer merely because it is another file.
 
 ## Phase 12: Contract Coherence (R7; C3)
-- [ ] 12.1 **RED**: add `contract-coherence.test.js` that fails while auth R3 requires a removed version matrix, but proves package-range load with missing/non-exact CLI evidence.
-- [ ] 12.2 **GREEN**: amend `specs/acm-opencode-claude-auth/spec.md` R3 to match ADR 0001: retain quarantine and hard platform/profile/credential gates; make CLI detection diagnostic-only.
-- [ ] 12.3 **REFACTOR**: keep the ADR and amended R3 in this decision-coherence slice; every future superseding compatibility decision MUST amend its spec in the same slice.
+- [x] 12.1 **RED**: add `contract-coherence.test.js` that fails while auth R3 requires a removed version matrix, but proves package-range load with missing/non-exact CLI evidence.
+- [x] 12.2 **GREEN**: amend `specs/acm-opencode-claude-auth/spec.md` R3 to match ADR 0001: retain quarantine and hard platform/profile/credential gates; make CLI detection diagnostic-only.
+- [x] 12.3 **REFACTOR**: keep the ADR and amended R3 in this decision-coherence slice; every future superseding compatibility decision MUST amend its spec in the same slice.
 
 ## Phase 13: Distribution Integrity (R8; C1)
-- [ ] 13.1 **RED**: add `install.test.js` offline fixture; it must fail on the stale `compatibility.json` request and assert the complete staged runtime asset set.
-- [ ] 13.2 **GREEN**: update `install.sh` to fetch only shipped adapter assets and stage them atomically in the fixture’s `ACM_SHARE_DIR`.
-- [ ] 13.3 **REFACTOR**: make fixture cleanup assert no host paths, aliases, credentials, or real installer targets were touched.
+- [x] 13.1 **RED**: add `install.test.js` offline fixture; it must fail on the stale `compatibility.json` request and assert the complete staged runtime asset set.
+- [x] 13.2 **GREEN**: update `install.sh` to fetch only shipped adapter assets and stage them atomically in the fixture’s `ACM_SHARE_DIR`.
+- [x] 13.3 **REFACTOR**: make fixture cleanup assert no host paths, aliases, credentials, or real installer targets were touched.
 
 ## Phase 14: Guided Migration (R9; C2)
-- [ ] 14.1 **RED**: correct `opencode_lifecycle_test.go`: both plugins plus `--confirm` exits nonzero, preserves bytes, and creates no backup; `--replace-upstream` is required.
-- [ ] 14.2 **GREEN**: update `opencode_lifecycle.go` and `README.md`: only `enable --confirm --replace-upstream` may migrate and back up JSON/JSONC.
-- [ ] 14.3 **REFACTOR**: share plugin-conflict detection without weakening checksum, ambiguity, or rollback guards.
+- [x] 14.1 **RED**: correct `opencode_lifecycle_test.go`: both plugins plus `--confirm` exits nonzero, preserves bytes, and creates no backup; `--replace-upstream` is required.
+- [x] 14.2 **GREEN**: update `opencode_lifecycle.go` and `README.md`: only `enable --confirm --replace-upstream` may migrate and back up JSON/JSONC.
+- [x] 14.3 **REFACTOR**: share plugin-conflict detection without weakening checksum, ambiguity, or rollback guards.
 
 ## Phase 15: Outcome and Durability Boundary (R10; W1/W2/W3/W7/S1)
-- [ ] 15.1 **RED**: extend real-binary guards for cooling/no replacement, begin-quarantine, busy, invalid lease, unknown operation, dispatcher invalid operation, and directory-sync-after-rename.
-- [ ] 15.2 **GREEN**: fsync the parent directory; map retryable busy/invalid-lease 503s with bounded retry signal, preserve non-retryable codes, and document all 503 outcomes in `design.md`.
-- [ ] 15.3 **REFACTOR**: centralize outcome mapping; model `replacement_available:false` explicitly in fixtures and retain mutation guards.
+- [x] 15.1 **RED**: extend real-binary guards for cooling/no replacement, begin-quarantine, busy, invalid lease, unknown operation, dispatcher invalid operation, and directory-sync-after-rename.
+- [x] 15.2 **GREEN**: fsync the parent directory; map retryable busy/invalid-lease 503s with bounded retry signal, preserve non-retryable codes, and document all 503 outcomes in `design.md`.
+- [x] 15.3 **REFACTOR**: centralize outcome mapping; model `replacement_available:false` explicitly in fixtures and retain mutation guards.
 
 ## Phase 16: Local Auth Error Containment (R11; W6)
-- [ ] 16.1 **RED**: add missing-credential and valid-control cases in `quota-integration.test.js`; assert `auth.fetch` exposes neither temp path nor credential identifier.
-- [ ] 16.2 **GREEN**: normalize local credential read/parse failures in `integrations/opencode/index.js` to a fixed safe error while retaining machine-response mapping.
-- [ ] 16.3 **REFACTOR**: isolate the safe-error helper and rerun the focused factory harness.
+- [x] 16.1 **RED**: add missing-credential and valid-control cases in `quota-integration.test.js`; assert `auth.fetch` exposes neither temp path nor credential identifier.
+- [x] 16.2 **GREEN**: normalize local credential read/parse failures in `integrations/opencode/index.js` to a fixed safe error while retaining machine-response mapping.
+- [x] 16.3 **REFACTOR**: isolate the safe-error helper and rerun the focused factory harness.
+
+## Round-5 Remediation Review Workload Forecast
+| Field | Value |
+|---|---|
+| Estimated changed lines | 600–810 across five slices |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | R12 → R13 → R14 → R15 → R16 |
+| Delivery / chain | auto-chain / feature-branch-chain |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+Chain strategy: feature-branch-chain
+400-line budget risk: High
+
+### Round-5 Remediation Work Units
+| Slice | Capability | Dependency | Line budget | Verification command | Real-binary / offline proof | Files touched |
+|---|---|---|---:|---|---|---|
+| R12 | Plain opt-in is always restorable | R11 | 150–190 | `go test -count=1 -run '^TestOpenCodeMigration(PlainEnableCreatesRestorableBackup|RollbackAndMissingBackup)$' .` | Real compiled `acm`: isolated plain enable then rollback restores bytes | `opencode_lifecycle.go`, `opencode_lifecycle_test.go`, `README.md` |
+| R13 | Custom installer share remains enable-able | R12 | 230–300 | `node --test integrations/opencode/test/install.test.js` | Offline `sh install.sh` + fake curl + built `acm`, custom `ACM_SHARE_DIR`, enable, staged ESM load | `install.test.js`, `opencode_lifecycle.go`, `specs/acm-opencode-plugin-lifecycle/spec.md`, `README.md` |
+| R14 | Compatibility guidance matches runtime policy | R13 | 45–70 | `node --test integrations/opencode/test/contract-coherence.test.js` | Offline factory loads with absent/non-exact CLI evidence | `README.md`, `contract-coherence.test.js` |
+| R15 | Doctor preserves legacy operational visibility | R14 | 110–150 | `go test -count=1 -run '^TestDoctor' .` | Built `acm doctor` with isolated HOME/ACM_DIR and fake tool binaries shows state plus profiles | `main.go`, `main_test.go` |
+| R16 | Replay idempotency contract is explicit | R15 | 65–100 | `node --test integrations/opencode/test/{contract-coherence,machine-contract}.test.js` | Real compiled binary accepts only matching ledger replay, returns current generation, and writes no state | `specs/acm-opencode-claude-failover/spec.md`, `design.md`, `test/{contract-coherence,machine-contract}.test.js` |
+
+Feature-branch chain: R12 base = tracker branch; R13 base = R12 branch; R14 base = R13 branch; R15 base = R14 branch; R16 base = R15 branch. Retarget/rebase any polluted child diff.
+
+## Phase 17: Restorable Plain Opt-In (R12; C1(R5))
+- [ ] 17.1 **RED**: in `opencode_lifecycle_test.go`, add no-upstream plain-enable tests that fail without manifest/backup, then prove real compiled `acm` enable→rollback restores original bytes under temp HOME, ACM_DIR, config, bin, and plugin paths.
+- [ ] 17.2 **GREEN**: make `opencode_lifecycle.go` create the checksummed backup and manifest before every config-mutating enable; update `README.md` so plain opt-in documents rollback availability.
+- [ ] 17.3 **REFACTOR**: retain one backup transaction for plain and replacement enable; rerun focused, real-binary, Go, Node, formatting, vet, and diff checks.
+
+## Phase 18: Custom-Share Installation Capability (R13; W1)
+- [ ] 18.1 **RED**: extend `install.test.js` with an offline custom-`ACM_SHARE_DIR` install that builds the real binary, runs enable against a temp config, and fails while lifecycle discovery uses the default share.
+- [ ] 18.2 **GREEN**: amend `specs/acm-opencode-plugin-lifecycle/spec.md` for the shared override; make `opencode_lifecycle.go` resolve `ACM_SHARE_DIR` before its default plugin path and document it in `README.md`.
+- [ ] 18.3 **REFACTOR**: keep installer, staged ESM load, enable, rollback, and host-canary assertions in one isolated harness; remove all sandbox trees.
+
+## Phase 19: Compatibility Documentation Coherence (R14; W2)
+- [ ] 19.1 **RED**: extend `contract-coherence.test.js` to fail while `README.md` names the removed matrix and to retain missing/non-exact CLI factory-load evidence.
+- [ ] 19.2 **GREEN**: replace the matrix claim in `README.md` with ADR 0001's package-range and diagnostic-only CLI policy.
+- [ ] 19.3 **REFACTOR**: centralize the README/ADR/spec assertions; rerun the offline factory harness and full Node suite.
+
+## Phase 20: Doctor Legacy Visibility (R15; W3)
+- [ ] 20.1 **RED**: add `main_test.go` cases that fail until `cmdDoctor` prints `estado : <ACM_DIR>` and delegates to `cmdLs`, including unavailable diagnostics and redaction controls.
+- [ ] 20.2 **GREEN**: restore the state line and profile listing in `main.go` without removing diagnostic aggregates or leaking lease/profile identifiers.
+- [ ] 20.3 **REFACTOR**: prove the compiled `acm doctor` output with temporary HOME, ACM_DIR, bin dirs, and fake tool binaries; rerun focused and full Go checks.
+
+## Phase 21: Replay-Exception Contract (R16; W5)
+- [ ] 21.1 **RED**: make `contract-coherence.test.js` fail until R7 S2 and `design.md` state the same replay exception; add a baseline real-binary replay trace without inventing a failing behavior test.
+- [ ] 21.2 **GREEN**: narrow failover R7 S2 to reject stale non-replay transitions while allowing only same-operation/profile ledger replays that return current generation before persistence; document this in `design.md`.
+- [ ] 21.3 **REFACTOR**: align terms across spec/design/tests and rerun the offline contract plus real-binary no-write replay proof.

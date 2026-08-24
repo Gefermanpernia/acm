@@ -25,7 +25,7 @@ test("transitions only confirmed Anthropic quota rejection", async () => {
   }, {
     machine: async (operation, fields) => {
       calls.push([operation, fields]);
-      return { outcome: "cooling", generation: 8, reset_at: 2000000000 };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000000, replacement_available: false };
     },
     now: () => 1999999955000,
     diagnostic: async (event) => diagnostics.push(event),
@@ -47,13 +47,13 @@ test("keeps quota recovery working while making missing and failed diagnostics o
   const result = await handleQuotaResponse(responseFor(fixture.confirmed), {
     operationID, selection: fixture.selection,
   }, {
-    machine: async () => ({ outcome: "cooling", generation: 8, reset_at: 2000000000 }),
+    machine: async () => ({ outcome: "cooling", generation: 8, reset_at: 2000000000, replacement_available: false }),
     now: () => 1999999955000,
     diagnosticError: (code) => errors.push(code),
   });
   assert.equal(result.status, 429);
   const failed = await handleQuotaResponse(responseFor(fixture.confirmed), { operationID, selection: fixture.selection }, {
-    machine: async () => ({ outcome: "cooling", reset_at: 2000000000 }), diagnostic: async () => { throw new Error("private"); }, diagnosticError: (code) => errors.push(code), now: () => 1999999955000,
+    machine: async () => ({ outcome: "cooling", reset_at: 2000000000, replacement_available: false }), diagnostic: async () => { throw new Error("private"); }, diagnosticError: (code) => errors.push(code), now: () => 1999999955000,
   });
   assert.equal(failed.status, 429);
   assert.deepEqual(errors, ["missing_diagnostic_sink", "record_failed"]);
@@ -97,7 +97,7 @@ test("leaves fallback cooldown selection to ACM for an invalid reset", async () 
   }, {
     machine: async (_operation, fields) => {
       request = fields;
-      return { outcome: "cooling", generation: 8, reset_at: 2000000090 };
+      return { outcome: "cooling", generation: 8, reset_at: 2000000090, replacement_available: false };
     },
     diagnostic: async () => {},
   });

@@ -6,6 +6,10 @@ import { runMachine } from "./machine.js";
 import { refreshCredentials } from "./oauth.js";
 import { handleQuotaResponse, mapMachineResponse } from "./quota.js";
 
+function safeCredentialError() {
+  return new Error("ACM Claude credentials are unavailable");
+}
+
 export function createPlugin(overrides = {}) {
   const deps = { platform: process.platform, machine: runMachine, read: readFile, send: fetch, now: Date.now, ...overrides };
   deps.diagnosticError ??= (code) => console.error(`ACM diagnostics: ${code}`);
@@ -22,7 +26,12 @@ export function createPlugin(overrides = {}) {
     await Promise.resolve(deps.diagnostic({ component: "adapter", event: "compatibility", outcome: version ? "recovered" : "unavailable", retryable: false, version })).catch(() => deps.diagnosticError("record_failed"));
     async function credentials(selection, id) {
       assertCompatibility(deps.platform, Boolean(selection?.profile && selection?.config_dir));
-      const document = JSON.parse(await deps.read(join(selection.config_dir, ".credentials.json"), "utf8"));
+      let document;
+      try {
+        document = JSON.parse(await deps.read(join(selection.config_dir, ".credentials.json"), "utf8"));
+      } catch {
+        throw safeCredentialError();
+      }
       const source = document?.claudeAiOauth;
       if (typeof source?.accessToken !== "string" || typeof source?.refreshToken !== "string" || typeof source?.expiresAt !== "number") {
         throw new Error("ACM Claude credentials are invalid");

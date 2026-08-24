@@ -71,7 +71,13 @@ Para habilitarla, cierre OpenCode y ejecute:
 ```sh
 acm opencode enable --confirm
 ```
-El comando valida `opencode.json` o `opencode.jsonc`, crea un respaldo con checksum y elimina `opencode-anthropic-login-via-cli` para mantener un único cargador Anthropic. Después reinicie OpenCode. Para volver a la configuración respaldada, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
+El comando valida `opencode.json` o `opencode.jsonc`. Si detecta `opencode-anthropic-login-via-cli`, solo o junto con el adaptador ACM, se detiene sin modificar la configuración ni crear respaldos. Revise el conflicto y confirme la migración de forma explícita:
+
+```sh
+acm opencode enable --confirm --replace-upstream
+```
+
+Solo esta ruta reemplaza el plugin upstream y crea un respaldo con checksum. Después reinicie OpenCode. Para volver a la configuración respaldada, cierre OpenCode, ejecute `acm opencode rollback --confirm` y reinícielo; el rollback solo restaura la configuración de OpenCode y no modifica el estado ni las cuentas de ACM.
 
 ## Cómo funciona
 

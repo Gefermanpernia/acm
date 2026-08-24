@@ -4,9 +4,9 @@
 
 - Change: `acm-opencode-claude-plugin`
 - Mode: Strict TDD
-- Delivery: `auto-chain` / `stacked-to-main`
-- Current slice: R5 `Replacement-aware quota transition` (`feat/opencode-plugin-r5-replacement-aware`)
-- Target: `feat/opencode-plugin-r4b-login-recovery` under `stacked-to-main`
+- Delivery: `auto-chain` / `feature-branch-chain`
+- Current slice: R11 `Local Auth Error Containment` (`feat/opencode-plugin-r11-auth-error-containment`)
+- Parent: `feat/opencode-plugin-r10-outcome-durability` under `feature-branch-chain`
 - PR 1 evidence revision: `sha256:c1002a733f7afab6595105e71146d3ce1d48c2b302dd666bf266f5c76c2584f2`
 - PR 2 source revisions: `machine.go sha256:0c446c12ebaf91501ea6f906e90df6f7cdd03e11bee8a9ce2418ce763a591ca8`; `machine_test.go sha256:0ee0eb4872587f1a480c731a75b9883c60167c5893570927517ff55e45333bd5`
 - PR 3 adapter revisions: `index.js sha256:f3f1cf365a8904998b88cc211bf0b80a93656823f0efa1cafd1712c24a6d2651`; `machine.js sha256:71d08bdd500d341cc2d4278f37c2a27928e651647f11c97eb799819661dcac9f`; `oauth.js sha256:34eafad5f37b71bb0f7f5e4145f57e68b22c1f1762881a46471b1191765dcc37`; `compat.js sha256:e8424aa08c009a14d1ada9a9a7498e1b41398eae347d4341d56564dd7715f90d`
@@ -442,3 +442,129 @@ None.
 | Runtime harness | Production import before: `REFUSED: unsupported OpenCode compatibility matrix`; after: `LOADED` (diagnostic recording failure remained non-blocking). |
 | Full gates | Node 24/24; formatting, vet, Go, race, and frozen-boundary commands exited 0. Authored slice: 55 additions + 138 deletions = 193/200; OpenSpec metadata excluded per prior slices. |
 | Rollback boundary | Restore the deleted matrix/checker and R5 versions of `compat.js`, `index.js`, package/fixture/tests; remove ADR 0001. |
+
+## R7 Contract Coherence
+- [x] 12.1 Added a RED contract guard proving package-range load with missing and `9.9.9` CLI evidence while rejecting the stale matrix requirement.
+- [x] 12.2 Amended auth R3 to retain quarantine and platform/profile/credential gates while making CLI detection diagnostic-only.
+- [x] 12.3 Amended ADR 0001 with the same-slice specification rule for future superseding compatibility decisions.
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 12.1 | `test/contract-coherence.test.js` | Structural + plugin factory | R6 compat 8/8 | 0/2; stale matrix and missing ADR rule | Implemented by 12.2–12.3; 2/2 | Missing CLI and `9.9.9` both load | Guard kept at public package/spec/ADR boundaries |
+| 12.2 | Same | Specification contract | 12.1 RED | Matrix language remained authoritative | 2/2 in `71.33182ms` | Hard gates and both diagnostic paths asserted | Requirement and scenario now match ADR 0001 |
+| 12.3 | Same | Decision coherence | 12.1 RED | ADR lacked same-slice rule | 2/2; Node 26/26 | Future supersession has an explicit guard | ADR and spec remain one rollback unit |
+### R7 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/contract-coherence.test.js` → exit 0; 2/2 passed in `71.33182ms` |
+| Runtime harness | Same command invoked the real plugin factory with missing and `9.9.9` CLI evidence; hooks loaded and diagnostics reported `unavailable`/`9.9.9` |
+| Neighbor/full adapter tests | R6 compatibility 8/8; full Node suite 26/26; both exit 0 |
+| Review budget | 74 additions + 12 deletions = 86/90 changed lines, including OpenSpec delivery metadata |
+| Rollback boundary | Remove the contract guard and revert only auth R3 plus ADR 0001's same-slice rule; R6 adapter behavior remains intact |
+
+## R7 Status
+42/54 planned tasks complete. R7 is ready for the R8 apply slice; R8–R11 remain pending.
+
+## R8 Distribution Integrity
+- [x] 13.1 Added an offline installer fixture that runs the real `install.sh` with fake `curl` and `acm`, fails on missing shipped assets, and asserts the complete staged runtime bundle.
+- [x] 13.2 Removed the stale `compatibility.json` fetch and moved a fully downloaded hidden staging directory into `ACM_SHARE_DIR/opencode`, with prior-bundle restoration on interrupted replacement.
+- [x] 13.3 Added cleanup-time host canaries for aliases, credentials, OpenCode configuration, and default install targets; cleanup also proves the entire temporary fixture tree is deleted.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 13.1 | `test/install.test.js` | Installer process integration | Node 26/26 | Exit 1; installer returned 22 with `fixture: missing shipped asset compatibility.json` | Implemented by 13.2; focused 1/1 | Complete seven-asset bundle plus staged-fetch rejection | Fixture owns every process, filesystem, and network boundary |
+| 13.2 | `install.sh` + fixture | Distribution transaction | 13.1 RED | Stale eighth asset aborted before bundle placement | Focused 1/1; staged factory exposed `auth` and `chat.headers` | Success replaces the bundle; rejected `quota.js` fetch preserves it byte-for-byte | Hidden same-share staging and prior-bundle restoration keep partial files unreachable |
+| 13.3 | `test/install.test.js` | Isolation/security refactor | Focused GREEN | Host-safety assertions were written before installer changes | Focused and full Node suites pass | Host canaries and sandbox state exercise distinct negative boundaries | Cleanup asserts canaries unchanged, logs contain only sandbox targets, `.acm` is absent, and the fixture root is removed |
+
+### R8 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/install.test.js` → exit 0; 1/1 passed; final run `182.193158ms` |
+| RED evidence | Same command before `install.sh` changed → exit 1; 0/1 passed; actual installer exit 22; stderr `fixture: missing shipped asset compatibility.json` |
+| Runtime harness | The focused test executes the real `sh install.sh` twice with temp `HOME`, `ACM_BIN_DIR`, `ACM_SHARE_DIR`, and `TMPDIR`; fake `curl` serves repository bytes offline, fake `acm` handles `version`/`init`, and the staged factory loads both public hooks |
+| Regression suite | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 27/27 passed; `990.875044ms` |
+| Host isolation | Cleanup re-reads six byte-identical host canaries covering `.bashrc`, `.zshrc`, credentials, OpenCode config, default binary, and default plugin; the command log must exclude host-home and include only sandbox HOME/BIN/SHARE; sandbox `.acm` must not exist; final `access(root)` must return `ENOENT` |
+| Static checks | `sh -n install.sh && git diff --check` → exit 0; no output |
+| Rollback boundary | Revert only `install.sh`, `integrations/opencode/test/install.test.js`, and R8 task/progress metadata; R7 and all machine, migration, outcome, and local-auth behavior remain unchanged |
+
+## R8 Status
+45/54 planned tasks complete. R8 closes round-4 C1 and is ready for SDD verification; R9–R11 remain pending.
+
+## R9 Guided Migration
+- [x] 14.1 Corrected the conflict contract: `enable --confirm` now exits nonzero for upstream-only and dual-plugin configurations, preserves exact bytes, and creates no backup.
+- [x] 14.2 Added the explicit `--replace-upstream` migration flag, restricted backup creation to that path, and documented the guided workflow.
+- [x] 14.3 Shared upstream/ACM plugin classification between conflict detection and mutation without changing checksum, ambiguity, restoration, or rollback guards.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 14.1 | `opencode_lifecycle_test.go` | Filesystem transaction | Existing lifecycle suite passed: exit 0, package `0.042s` | Exit 1: dual-plugin migration returned success and changed bytes | Implemented by 14.2; focused suite passed | Upstream-only and dual-plugin states both require explicit replacement and create no backup before confirmation | Exact-byte and absent-manifest/backup assertions remain at the command boundary |
+| 14.2 | Same + real compiled binary | CLI process | 14.1 RED captured before production edits | Two focused tests failed for implicit replacement | `go test -run TestOpenCodeMigration .` passed: exit 0, package `9.612s` | Real binary exits 2 on conflict and 0 with `--replace-upstream`; JSON and JSONC migration paths remain covered | README describes separate fresh-enable and guided-replacement paths |
+| 14.3 | Same | Approval/refactor | Focused GREEN passed before helper extraction | N/A: behavior-preserving refactor used the 14.1 approval cases; no artificial RED | Focused and regression suites remained green | Existing ambiguity, post-write restoration, corrupt-checksum, missing-backup, and successful rollback cases all pass | `classifyOpenCodePlugin` is shared by detection and mutation; diff review found no out-of-scope behavior change |
+
+### R9 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -run TestOpenCodeMigration .` → exit 0; 4/4 top-level lifecycle tests passed; package `9.612s` |
+| RED evidence | Same focused command before production changes → exit 1; dual-plugin case failed with `plugin conflict changed config or returned success`; upstream-only case failed with `migration accepted without explicit replacement` |
+| Runtime harness | `TestOpenCodeMigrationRealBinaryRequiresExplicitReplacement` builds the real `acm` in a temporary root; conflict returns exact exit 2 with byte-identical config and no backup, while `--replace-upstream` returns 0, removes upstream, enables ACM, and creates both backup files |
+| Regression commands | `go test ./...` → exit 0, package `12.685s`; `node --test "integrations/opencode/test/*.test.js"` → exit 0, 27/27 passed, `13714.717266ms` |
+| Host isolation | Every lifecycle run used `t.TempDir()` plus temporary `HOME`, `ACM_DIR`, `ACM_OPENCODE_CONFIG_HOME`, `ACM_OPENCODE_PLUGIN_PATH`, `TMPDIR`, and `GOCACHE`; no command addressed real OpenCode configuration, ACM state, profiles, or credentials |
+| Static and refactor checks | `gofmt -l`, `go vet ./...`, and `git diff --check` → exit 0 with no output; manual diff review confirmed only lifecycle migration, its tests, README guidance, and SDD metadata changed |
+| Rollback boundary | Revert R9 changes in `opencode_lifecycle.go`, `opencode_lifecycle_test.go`, `README.md`, and Phase 14 task/progress metadata; R8 distribution and all machine, adapter, auth, and durability behavior remain unchanged |
+
+## R9 Status
+48/54 planned tasks complete. R9 closes round-4 C2; R10–R11 remain pending.
+
+## R10 Outcome and Durability Boundary
+- [x] 15.1 Extended the compiled-binary guards for quota cooling without a replacement, refresh-begin quarantine, state contention, invalid leases, unknown logical operations, dispatcher-invalid operations, and parent-directory sync after rename.
+- [x] 15.2 Synced the parent directory after atomic rename, added bounded `Retry-After: 1` to retryable 503 outcomes, retained exact non-retryable codes, and documented every 503 class in `design.md`.
+- [x] 15.3 Centralized adapter outcome classification, made every synthetic cooling fixture state `replacement_available: false` explicitly, and retained exact-key, secretlessness, and mutation guards.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 15.1 | `machine_test.go`, `test/{machine-contract,quota-integration}.test.js` | Go filesystem + compiled-binary adapter | Go machine, machine contract, and quota integration all passed before edits | Directory guard failed with `sync order = [file]`; adapter guard reported both `invalid_lease: null !== 1` and `state_busy: null !== 1`; targeted mutations made cooling/no-replacement, begin-quarantine, unknown-operation, and dispatcher-invalid guards fail on their exact changed contract | Implemented by 15.2; all three focused commands passed | Real binary induced all six machine outcomes; Go seam proved file-sync → rename → directory-sync order | Existing exact-key, exit-taxonomy, mutation, and secret-absence assertions remain intact |
+| 15.2 | Same + `design.md` | Durability + response mapping | 15.1 RED captured before production edits | Missing parent sync and missing bounded retry headers failed for their intended reasons | `go test -run TestMachine .` and both required Node guards passed | Retryable 503s carry `Retry-After: 1`; non-retryable 503s retain code/no header; cooling replacement/no-replacement and quarantine remain distinct | 503 policy is documented exhaustively without changing exit codes |
+| 15.3 | `test/{machine-contract,quota-integration,quota}.test.js` | Approval/refactor | Focused GREEN passed before extraction | N/A: behavior-preserving extraction used the passing outcome matrix; no artificial RED | Focused Go, compiled-binary Node, quota fixtures, and full regressions remained green | Fixtures state `replacement_available: false`; real binary separately proves `true` and `false` | `machineOutcome` owns status/body/retry classification; diff review found no out-of-scope behavior change |
+
+### R10 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `go test -run TestMachine .` → exit 0, package `3.242s`; machine contract → 1/1 passed in `897.017319ms`; quota integration → 1/1 passed in `946.037735ms` |
+| Runtime harness | Both Node guards build the real `acm` under temporary roots. They induced cooling with and without a replacement, begin quarantine, lock contention, invalid lease, unknown operation, dispatcher invalid operation, and mapped every captured envelope through production adapter code. |
+| Regression suite | `go test ./...` → exit 0, package `11.967s`; `node --test "integrations/opencode/test/*.test.js"` → exit 0, 27/27 passed in `1105.952962ms` |
+| Static checks | `gofmt -l`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | Verification exported temporary `HOME`, `ACM_DIR`, `ACM_OPENCODE_CONFIG_HOME`, `TMPDIR`, and `GOCACHE`; binaries, state, lock files, credentials, and caches stayed under the temporary root and cleanup was trap/test-owned. No real profile or credential path was addressed. |
+| Retry regression | Replacement-available quota remained `429` with no `Retry-After`; no-replacement quota remained `429` with an explicit reset-derived header. |
+| Rollback boundary | Revert R10 changes in `machine.go`, `machine_test.go`, `integrations/opencode/{quota.js,test/machine-contract.test.js,test/quota-integration.test.js,test/quota.test.js}`, `design.md`, and Phase 15 task/progress metadata. R9 migration and R11 local-auth handling remain untouched. |
+
+## R10 Status
+51/54 planned tasks complete. R10 closes W1, W2, W3, W7, and S1; R11 remains pending and was not started.
+
+## R11 Local Auth Error Containment
+- [x] 16.1 Added missing-credential and healthy-control factory cases proving `auth.fetch` exposes no temporary path or credential identifier and still forwards valid credentials.
+- [x] 16.2 Normalized only local credential read and JSON parse failures to the fixed `ACM Claude credentials are unavailable` error; machine failures retain the R10 response mapping.
+- [x] 16.3 Extracted `safeCredentialError`, reran the factory harness, and diff-reviewed the refactor without finding any out-of-scope behavior change.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 16.1 | `test/quota-integration.test.js` | Factory + filesystem | Focused harness passed 1/1 before edits | Exit 1; ENOENT exposed the complete temporary credential path and `PRIVATE-CREDENTIAL-ID` | Implemented by 16.2; focused harness passed | Missing credential and valid 200 `ok-control` exercise failure and healthy paths | Cases share the real factory boundary and isolated synthetic filesystem |
+| 16.2 | `index.js` | Local auth boundary | 16.1 RED captured before production edits | Raw local read error escaped `auth.fetch` | Focused harness passed 3/3 | Existing real-machine cooling, quarantine, 503, quota, and passthrough mappings remained green | Catch scope ends before refresh and catches neither selection nor machine response mapping |
+| 16.3 | `index.js`, factory harness | Approval/refactor | Focused GREEN passed before helper extraction | N/A: behavior-preserving extraction used the passing 16.1 cases | Focused and regression suites passed | Fixed failure and healthy control both remained explicit subtests | `safeCredentialError` owns the non-informative error; diff review confirmed no out-of-scope change |
+
+### R11 Work Unit Evidence
+| Evidence | Exact value |
+|---|---|
+| Focused test | `node --test integrations/opencode/test/quota-integration.test.js` → exit 0; 3/3 passed in `978.747631ms` |
+| RED evidence | Same command before production changes → exit 1; `leaked temp path: ENOENT ... /PRIVATE-CREDENTIAL-ID/.credentials.json` |
+| Runtime harness | The focused command invoked the real plugin factory and `auth.fetch` against a nonexistent credential path beneath temporary `ACM_DIR`; the valid control returned status 200/body `ok-control` with the expected synthetic bearer token |
+| Regression suite | `node --test "integrations/opencode/test/*.test.js"` → exit 0; 29/29 passed in `1060.594336ms`; `go test ./...` → exit 0 |
+| Static checks | `gofmt -l .`, `go vet ./...`, and `git diff --check` → exit 0 with no output |
+| Host isolation | The harness used a fresh `mkdtemp` root, temporary `HOME`, `ACM_DIR`, and `ACM_OPENCODE_CONFIG_HOME`; all credential paths and binaries stayed beneath it and `t.after` recursively removed it |
+| Rollback boundary | Revert only the safe local read/parse normalization in `integrations/opencode/index.js`, the two factory cases in `test/quota-integration.test.js`, and Phase 16 metadata; R7–R10 behavior remains intact |
+
+## Round-4 Remediation Chain Status
+54/54 planned tasks complete. R7–R11 close contract coherence, distribution integrity, guided migration, machine outcome/durability, and local auth error containment. W4 non-corrupting idempotency was deliberately not planned for this chain and remains outside its remediation scope.

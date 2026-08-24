@@ -1,6 +1,7 @@
 import { redactDiagnostic } from "./diagnostics.js";
 
 const maxEvidenceBytes = 4 << 10;
+const transientRetryAfter = "1";
 
 function reportDiagnosticFailure(dependencies, code) {
   try { (dependencies.diagnosticError ?? console.error)(code); } catch {}
@@ -43,27 +44,27 @@ function retryAfter(resetAt, now) {
   return Number.isInteger(resetAt) && resetAt > current ? resetAt - current : undefined;
 }
 
-export function mapMachineResponse(value, now = Date.now) {
-  if (value instanceof Response) return value;
+function machineOutcome(value, now) {
   const detail = value?.error ?? value;
   const code = /^[a-z][a-z0-9_]{0,63}$/.test(detail?.code ?? "") ? detail.code : "machine_failed";
-  const quarantined = code === "credential_quarantined";
-  const cooling = value?.outcome === "cooling" || code === "no_available_profile" && detail?.retryable === true;
-  const headers = new Headers();
-  const delay = retryAfter(value?.reset_at, now);
-  if (cooling && value?.replacement_available !== true && delay !== undefined) {
-    headers.set("retry-after", String(delay));
+  if (code === "credential_quarantined") {
+    return { status: 401, body: { action: "acm login", outcome: "quarantined", retryable: false } };
   }
-  const body = quarantined ? {
-    action: "acm login",
-    outcome: "quarantined",
-    retryable: false,
-  } : {
-    ...(cooling ? {} : { code }),
-    outcome: cooling ? "cooling" : "unavailable",
-    retryable: cooling || detail?.retryable === true,
-  };
-  return Response.json(body, { status: quarantined ? 401 : cooling ? 429 : 503, headers });
+  if (value?.outcome === "cooling" || code === "no_available_profile" && detail?.retryable === true) {
+    const delay = value?.replacement_available === true ? undefined : retryAfter(value?.reset_at, now);
+    return { status: 429, retryAfter: delay, body: { outcome: "cooling", retryable: true } };
+  }
+  const retryable = detail?.retryable === true;
+  return { status: 503, retryAfter: retryable ? transientRetryAfter : undefined,
+    body: { code, outcome: "unavailable", retryable } };
+}
+
+export function mapMachineResponse(value, now = Date.now) {
+  if (value instanceof Response) return value;
+  const outcome = machineOutcome(value, now);
+  const headers = new Headers();
+  if (outcome.retryAfter !== undefined) headers.set("retry-after", String(outcome.retryAfter));
+  return Response.json(outcome.body, { status: outcome.status, headers });
 }
 
 export async function handleQuotaResponse(response, context, dependencies) {

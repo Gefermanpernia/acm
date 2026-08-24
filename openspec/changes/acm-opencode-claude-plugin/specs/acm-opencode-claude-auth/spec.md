@@ -41,7 +41,7 @@ The plugin MUST refresh normally expired credentials and commit them through the
 
 ### Requirement: Credential Quarantine and Safe Compatibility
 
-Rejected, revoked, or unrecoverable credentials MUST be quarantined and require `acm login`; the plugin MUST NOT retry them on every request. Compatibility-sensitive operations MUST block outside the explicit supported OpenCode/Claude CLI matrix.
+Rejected, revoked, or unrecoverable credentials MUST be quarantined and require `acm login`; the plugin MUST NOT retry them on every request. The declared `@opencode-ai/plugin` package range SHALL govern plugin API compatibility. Linux, ACM-managed profile, and credential-shape validation MUST remain hard gates. Claude CLI detection MUST be diagnostic-only; missing or non-exact CLI evidence MUST NOT block plugin load.
 
 #### Scenario: Refresh credentials are revoked
 
@@ -49,11 +49,12 @@ Rejected, revoked, or unrecoverable credentials MUST be quarantined and require 
 - WHEN the plugin processes the outcome
 - THEN it MUST quarantine the profile and require `acm login` before reuse.
 
-#### Scenario: Unsupported version attempts a sensitive operation
+#### Scenario: Claude CLI evidence is diagnostic only
 
-- GIVEN the OpenCode or Claude CLI version is outside the supported matrix
-- WHEN a compatibility-sensitive operation is requested
-- THEN the plugin MUST block safely and report the incompatibility.
+- GIVEN the declared OpenCode plugin package range resolves and Claude CLI evidence is missing or non-exact
+- WHEN the plugin loads on Linux for an ACM-managed profile with valid credentials
+- THEN the plugin SHALL continue without a CLI version gate
+- AND it SHALL record only bounded compatibility diagnostics.
 
 ### Requirement: Redacted Diagnostics
 
