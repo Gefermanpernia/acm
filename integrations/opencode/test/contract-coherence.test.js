@@ -5,9 +5,9 @@ import { createPlugin } from "../index.js";
 
 const packageURL = new URL("../package.json", import.meta.url);
 const readmeURL = new URL("../../../README.md", import.meta.url);
-const specURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/specs/acm-opencode-claude-auth/spec.md", import.meta.url);
-const failoverSpecURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/specs/acm-opencode-claude-failover/spec.md", import.meta.url);
-const designURL = new URL("../../../openspec/changes/acm-opencode-claude-plugin/design.md", import.meta.url);
+const specURL = new URL("../../../openspec/specs/acm-opencode-claude-auth/spec.md", import.meta.url);
+const failoverSpecURL = new URL("../../../openspec/specs/acm-opencode-claude-failover/spec.md", import.meta.url);
+const designURL = new URL("../../../openspec/changes/archive/2026-08-24-acm-opencode-claude-plugin/design.md", import.meta.url);
 const adrURL = new URL("../../../docs/03-architecture/decisions/0001-use-ecosystem-plugin-compatibility.md", import.meta.url);
 const removedMatrix = /matriz fijada OpenCode 1\.18\.19 \/ SDK 1\.17\.12 \/ Claude CLI 2\.1\.236/;
 const replayException = "ACM MAY accept a stale submitted generation only for a same-operation, same-profile ledger replay; it MUST return the current generation and MUST return before state persistence.";
